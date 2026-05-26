@@ -15,6 +15,7 @@ from utils.cache_manager import cache_manager
 from utils.constants import (
     CACHE_TTL_TEAM,
     CACHE_TTL_TEAM_MATCHES,
+    CACHE_TTL_TEAM_STATS,
     CACHE_TTL_TEAM_TRANSACTIONS,
     VLR_BASE_URL,
 )
@@ -304,17 +305,18 @@ def _parse_event_placements(html: HTMLParser) -> tuple[list[dict], str]:
         if match and not total_winnings:
             total_winnings = "$" + match.group(1)
 
-    # Event placement rows — vlr uses anchor tags that link to the event
-    for event_anchor in container.css("a"):
+    # Event placement rows — vlr uses .team-event-item anchors inside .wf-card
+    for event_anchor in container.css("a.team-event-item"):
         href = _attr(event_anchor, "href")
         if not href:
             continue
         event_url = build_full_url(href)
 
-        # Event name: may be in a child span or as direct text
+        # Event name: sits in a div.text-of child
         event_name_elem = (
             event_anchor.css_first(".wf-title-med")
             or event_anchor.css_first(".event-item-title")
+            or event_anchor.css_first(".text-of")
             or event_anchor.css_first("div")
         )
         event_name = _text(event_name_elem) if event_name_elem else _text(event_anchor)
@@ -328,22 +330,27 @@ def _parse_event_placements(html: HTMLParser) -> tuple[list[dict], str]:
         placement = _extract_placement(full_text)
         prize = _extract_prize_from_text(full_text)
 
-        # Date: look for a date-shaped substring
-        date = _extract_date_from_text(full_text)
+        # Year: sits in the last child div of the anchor (e.g. <div>2026</div>)
+        all_divs = event_anchor.css("div")
+        date = _text(all_divs[-1]) if all_divs else ""
 
         if event_name or placement:
             placements.append(
                 {
-                    "event": event_name,
-                    "series": series,
-                    "placement": placement,
-                    "prize": prize,
-                    "date": date,
+                    "event": _normalize_ws(event_name),
+                    "series": _normalize_ws(series),
+                    "placement": _normalize_ws(placement),
+                    "prize": _normalize_ws(prize),
+                    "date": _normalize_ws(date),
                     "url": event_url,
                 }
             )
 
     return placements, total_winnings
+
+
+def _normalize_ws(text: str) -> str:
+    return re.sub(r'\s+', ' ', text).strip()
 
 
 def _extract_placement(text: str) -> str:
@@ -390,6 +397,63 @@ def _extract_date_from_text(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Stats scraper
+# ---------------------------------------------------------------------------
+
+
+async def vlr_team_stats(team_id: str) -> dict:
+    """Scrape per-map statistics from the team stats page."""
+    cache_key = ("team_stats", team_id)
+
+    async def build():
+        url = f"{VLR_BASE_URL}/team/stats/{team_id}/"
+        client = get_http_client()
+        resp = await fetch_with_retries(url, client=client)
+        status = resp.status_code
+
+        if status >= 400:
+            logger.warning("Non-200 response %d for team stats %s", status, team_id)
+            raise HTTPException(
+                status_code=status,
+                detail=f"VLR.GG returned status {status} for team stats {team_id}",
+            )
+
+        html = parse_html(resp.text)
+        rows = html.css("table.wf-table.mod-team-maps tbody tr")
+        maps: list[dict] = []
+
+        for row in rows:
+            tds = row.css("td")
+            if len(tds) < 13:
+                continue
+
+            map_raw = _text(tds[0])
+            m = re.match(r"(.+?)\s*\((\d+)\)", map_raw)
+            map_name = m.group(1).strip() if m else map_raw
+            map_games = m.group(2) if m else ""
+
+            maps.append({
+                "map": _normalize_ws(map_name),
+                "games": int(map_games) if map_games.isdigit() else 0,
+                "win_pct": _text(tds[2]),
+                "wins": int(_text(tds[3])) if _text(tds[3]).isdigit() else 0,
+                "losses": int(_text(tds[4])) if _text(tds[4]).isdigit() else 0,
+                "atk_first": int(_text(tds[5])) if _text(tds[5]).isdigit() else 0,
+                "def_first": int(_text(tds[6])) if _text(tds[6]).isdigit() else 0,
+                "atk_rwin_pct": _text(tds[7]),
+                "atk_rw": int(_text(tds[8])) if _text(tds[8]).isdigit() else 0,
+                "atk_rl": int(_text(tds[9])) if _text(tds[9]).isdigit() else 0,
+                "def_rwin_pct": _text(tds[10]),
+                "def_rw": int(_text(tds[11])) if _text(tds[11]).isdigit() else 0,
+                "def_rl": int(_text(tds[12])) if _text(tds[12]).isdigit() else 0,
+            })
+
+        return {"data": {"status": status, "segments": maps}}
+
+    return await cache_manager.get_or_create_async(CACHE_TTL_TEAM_STATS, build, *cache_key)
+
+
+# ---------------------------------------------------------------------------
 # Match history helpers (used by vlr_team_matches)
 # ---------------------------------------------------------------------------
 
@@ -425,12 +489,13 @@ def _parse_team_match_item(item) -> dict | None:
 
     # Teams — VLR renders both teams; the "home" team is typically listed first
     team_elems = item.css(".m-item-team")
+    logo_imgs = item.css(".m-item-logo img")
     teams: list[dict] = []
-    for te in team_elems:
+    for i, te in enumerate(team_elems):
         t_name = _text(te.css_first(".m-item-team-name"))
         t_tag = _text(te.css_first(".m-item-team-tag"))
-        t_logo_img = te.css_first(".m-item-logo img") or te.css_first("img")
-        t_logo = normalize_image_url(_attr(t_logo_img, "src"))
+        t_logo_img = logo_imgs[i] if i < len(logo_imgs) else None
+        t_logo = normalize_image_url(_attr(t_logo_img, "src")) if t_logo_img else ""
         teams.append({"name": t_name, "tag": t_tag, "logo": t_logo})
 
     while len(teams) < 2:
@@ -445,15 +510,19 @@ def _parse_team_match_item(item) -> dict | None:
     ]
     event = event_lines[-1] if event_lines else ""
 
-    # Date
+    # Date / time
     date_elem = item.css_first(".m-item-date")
-    date = _text(date_elem)
+    raw = _text(date_elem) if date_elem else ""
+    m = re.match(r"(\d{4}/\d{2}/\d{2})", raw)
+    date = m.group(1) if m else ""
+    time = raw[m.end():].strip() if m else raw.strip()
 
     return {
         "match_id": match_id,
         "url": match_url,
         "event": event,
         "date": date,
+        "time": time,
         "team1": teams[0],
         "team2": teams[1],
         "score": score,
