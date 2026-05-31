@@ -57,6 +57,7 @@ class FakeResponse:
     def __init__(self, status_code: int, text: str):
         self.status_code = status_code
         self.text = text
+        self.content = text.encode("utf-8")
         self.headers: dict = {}
 
 
@@ -65,7 +66,7 @@ class FakeAsyncClient:
         self.response = response
         self.calls: list[tuple[str, int | None]] = []
 
-    async def get(self, url: str, timeout=None):
+    async def get(self, url: str, timeout=None, headers=None):
         self.calls.append((url, timeout))
         return self.response
 
@@ -136,7 +137,7 @@ async def test_vlr_news_coalesces_concurrent_cache_misses(monkeypatch):
     cache_manager.clear_all()
     client = FakeAsyncClient(FakeResponse(200, NEWS_HTML))
 
-    async def delayed_get(url: str, timeout=None):
+    async def delayed_get(url: str, timeout=None, headers=None):
         await asyncio.sleep(0)
         return await FakeAsyncClient.get(client, url, timeout)
 

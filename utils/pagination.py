@@ -16,10 +16,13 @@ from utils.constants import (
     MAX_MATCH_PAGE_WINDOW,
     MAX_MATCH_RETRIES,
     MAX_MATCH_TIMEOUT,
+    PAGINATION_SEMAPHORE_LIMIT,
 )
 from utils.http_client import get_http_client
 
 logger = logging.getLogger(__name__)
+
+_pagination_semaphore = asyncio.Semaphore(PAGINATION_SEMAPHORE_LIMIT)
 
 
 @dataclass
@@ -124,7 +127,8 @@ async def scrape_multiple_pages(
                     retry_count + 1, config.max_retries,
                 )
 
-                resp = await client.get(url, timeout=config.timeout)
+                async with _pagination_semaphore:
+                    resp = await client.get(url, timeout=config.timeout)
 
                 if resp.status_code != 200:
                     logger.warning("Page %d returned status %d", page, resp.status_code)
