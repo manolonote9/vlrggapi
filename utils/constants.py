@@ -64,3 +64,10 @@ CACHE_TTL_TEAM_TRANSACTIONS = 3600
 CACHE_TTL_TEAM_STATS = 600
 CACHE_TTL_EVENT_MATCHES = 600
 CACHE_TTL_HEALTH_UPSTREAM = 60
+
+# /stats region vocabulary
+# The /stats page uses a DIFFERENT region taxonomy from /rankings. vlr.gg's
+# <select name="region"> offers exactly these canonical values; any other value
+# silently falls back to "all". Kept separate from utils.utils.region (the
+# /rankings contract) so /rankings?region=americas still returns 400.
+STATS_REGIONS = frozenset({"all", "americas", "emea", "pacific", "china", "intl"})
