@@ -59,13 +59,14 @@ def _parse_stats_row(item) -> dict:
 
 
 @handle_scraper_errors
-async def vlr_stats(region_key: str, timespan: str):
+async def vlr_stats(region_key: str, timespan: str, event_id: str | None = None):
     async def build():
         validate_region(region_key)
         validate_timespan(timespan)
 
+        event_id_param = event_id if event_id else "all"
         base_url = (
-            f"{VLR_STATS_URL}/?event_group_id=all&event_id=all"
+            f"{VLR_STATS_URL}/?event_group_id=all&event_id={event_id_param}"
             f"&region={region_key}&country=all&min_rounds=200"
             f"&min_rating=1550&agent=all&map_id=all"
         )
@@ -93,5 +94,5 @@ async def vlr_stats(region_key: str, timespan: str):
         return data
 
     return await cache_manager.get_or_create_async(
-        CACHE_TTL_STATS, build, "stats", region_key, timespan
+        CACHE_TTL_STATS, build, "stats", region_key, timespan, event_id or "all"
     )

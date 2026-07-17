@@ -228,6 +228,63 @@ def _parse_roster(html: HTMLParser) -> list[dict]:
 
     return roster
 
+
+def _parse_categorized_roster(html: HTMLParser) -> dict:
+    """
+    Parse the roster into categorized groups: active, staff, former, benched.
+
+    Returns:
+        {
+            "active": [player_dict, ...],
+            "staff": [player_dict, ...],
+            "former": [player_dict, ...],
+            "benched": [player_dict, ...],
+        }
+    """
+    groups: dict[str, list[dict]] = {
+        "active": [],
+        "staff": [],
+        "former": [],
+        "benched": [],
+    }
+    seen_ids: set[str] = set()
+    current_group = "active"
+
+    container = html.css_first(".team-summary-container-1")
+    if not container:
+        for item in html.css(".team-roster-item"):
+            player = _parse_single_roster_item(item, is_staff=False)
+            dedup_key = player["alias"] or player["id"]
+            if dedup_key and dedup_key not in seen_ids:
+                seen_ids.add(dedup_key)
+                groups["active"].append(player)
+        return groups
+
+    for node in container.css("*"):
+        css_class = node.attributes.get("class", "") or ""
+
+        if "wf-label" in css_class and "team-roster-item" not in css_class:
+            label_text = node.text(strip=True).lower()
+            if any(k in label_text for k in ("staff", "coach", "analyst")):
+                current_group = "staff"
+            elif any(k in label_text for k in ("former", "past", "previous")):
+                current_group = "former"
+            elif any(k in label_text for k in ("bench", "inactive", "reserve")):
+                current_group = "benched"
+            elif any(k in label_text for k in ("player", "roster", "active")):
+                current_group = "active"
+            continue
+
+        if "team-roster-item" in css_class and "team-roster-item-" not in css_class:
+            is_staff = current_group == "staff"
+            player = _parse_single_roster_item(node, is_staff)
+            dedup_key = player["alias"] or player["id"]
+            if dedup_key and dedup_key not in seen_ids:
+                seen_ids.add(dedup_key)
+                groups[current_group].append(player)
+
+    return groups
+
 def _parse_single_roster_item(item, is_staff: bool) -> dict:
     """Parse one .team-roster-item node into a player/staff dict."""
     anchor = item.css_first("a")
@@ -853,4 +910,220 @@ async def vlr_team_transactions(team_id: str) -> dict:
 
     return await cache_manager.get_or_create_async(
         CACHE_TTL_TEAM_TRANSACTIONS, build, *cache_key
+    )
+
+
+# ---------------------------------------------------------------------------
+# Team history scraper — combines roster categories + transactions
+# ---------------------------------------------------------------------------
+
+
+@handle_scraper_errors
+async def vlr_team_history(team_id: str) -> dict:
+    """
+    Scrape the categorized team roster (active, staff, former, benched)
+    from the team profile page.
+
+    Fetches ``/team/{team_id}`` and ``/team/transactions/{team_id}/``
+    concurrently, then returns categorized roster groups with optional
+    cross-referenced tenure dates from transactions.
+
+    Args:
+        team_id: Numeric VLR.GG team identifier.
+
+    Returns:
+        Standard response dict with a single segment containing
+        ``active_players``, ``staff``, ``former_players``,
+        ``benched_players``, and ``transactions`` lists.
+    """
+    cache_key = ("team_history", team_id)
+
+    async def build():
+        url = f"{VLR_BASE_URL}/team/{team_id}"
+        client = get_http_client()
+        resp = await fetch_with_retries(url, client=client)
+        status = resp.status_code
+
+        if status >= 400:
+            logger.warning("Non-200 response %d for team history %s", status, team_id)
+            raise HTTPException(
+                status_code=status,
+                detail=f"VLR.GG returned status {status} for team history {team_id}",
+            )
+
+        html = parse_html(resp.text)
+        categorized = _parse_categorized_roster(html)
+
+        # Cross-reference former/benched players with transactions for dates
+        transactions_result = None
+        try:
+            transactions_result = await vlr_team_transactions(team_id)
+        except Exception:
+            pass
+
+        transactions = []
+        tx_by_name: dict[str, dict] = {}
+        if transactions_result:
+            transactions = transactions_result.get("data", {}).get("segments", [])
+            for tx in transactions:
+                pname = (tx.get("player") or {}).get("name", "").lower().strip()
+                if pname:
+                    if pname not in tx_by_name:
+                        tx_by_name[pname] = {}
+                    # Track the latest join and leave dates
+                    date = tx.get("date", "")
+                    action = tx.get("action", "")
+                    if "join" in action or "signed" in action:
+                        if not tx_by_name[pname].get("date_joined") or date > tx_by_name[pname]["date_joined"]:
+                            tx_by_name[pname]["date_joined"] = date
+                    elif any(k in action for k in ("left", "released", "benched", "inactive")):
+                        if not tx_by_name[pname].get("date_left") or date > tx_by_name[pname]["date_left"]:
+                            tx_by_name[pname]["date_left"] = date
+
+        # Enrich former and benched players with transaction dates
+        for group_key in ("former", "benched"):
+            for player in categorized[group_key]:
+                pname = player.get("alias", "").lower().strip()
+                if pname in tx_by_name:
+                    if tx_by_name[pname].get("date_joined"):
+                        player["date_joined"] = tx_by_name[pname]["date_joined"]
+                    if tx_by_name[pname].get("date_left"):
+                        player["date_left"] = tx_by_name[pname]["date_left"]
+
+        segment = {
+            "active_players": categorized["active"],
+            "staff": categorized["staff"],
+            "former_players": categorized["former"],
+            "benched_players": categorized["benched"],
+            "transactions": transactions,
+        }
+
+        return {"data": {"status": status, "segments": [segment]}}
+
+    return await cache_manager.get_or_create_async(
+        CACHE_TTL_TEAM_TRANSACTIONS, build, *cache_key
+    )
+
+
+# ---------------------------------------------------------------------------
+# Team upcoming matches scraper
+# ---------------------------------------------------------------------------
+
+
+def _parse_team_upcoming_item(item) -> dict | None:
+    """Parse one upcoming match item from the team page sidebar."""
+    anchor = item if item.tag == "a" else item.css_first("a")
+    href = _attr(anchor, "href") if anchor else _attr(item, "href")
+    if not href:
+        return None
+
+    match_id, _ = parse_href_id_slug(href)
+    match_url = build_full_url(href)
+
+    # Teams
+    team_elems = item.css(".m-item-team")
+    logo_imgs = item.css(".m-item-logo img")
+    teams: list[dict] = []
+    for i, te in enumerate(team_elems):
+        t_name = _text(te.css_first(".m-item-team-name"))
+        t_tag = _text(te.css_first(".m-item-team-tag"))
+        t_logo_img = logo_imgs[i] if i < len(logo_imgs) else None
+        t_logo = normalize_image_url(_attr(t_logo_img, "src")) if t_logo_img else ""
+        teams.append({"name": t_name, "tag": t_tag, "logo": t_logo})
+
+    while len(teams) < 2:
+        teams.append({"name": "", "tag": "", "logo": ""})
+
+    # Event
+    event_elem = item.css_first(".m-item-event")
+    event_lines = [
+        ln.strip() for ln in (_text(event_elem)).split("\n") if ln.strip()
+    ] if event_elem else []
+    event = event_lines[-1] if event_lines else ""
+
+    # Date / time
+    date_elem = item.css_first(".m-item-date")
+    raw = _text(date_elem) if date_elem else ""
+    m = re.match(r"(\d{4}/\d{2}/\d{2})", raw)
+    date = m.group(1) if m else raw
+    time = raw[m.end():].strip() if m else ""
+
+    # ETA / time until match
+    eta_elem = item.css_first(".h-match-eta") or item.css_first(".match-item-eta")
+    eta = _text(eta_elem)
+
+    return {
+        "match_id": match_id,
+        "url": match_url,
+        "event": event,
+        "date": date,
+        "time": time,
+        "eta": eta,
+        "team1": teams[0],
+        "team2": teams[1],
+    }
+
+
+@handle_scraper_errors
+async def vlr_team_upcoming(team_id: str) -> dict:
+    """
+    Scrape upcoming matches for a team from VLR.GG.
+
+    Fetches ``/team/{team_id}`` and extracts upcoming match cards
+    from the page.
+
+    Args:
+        team_id: Numeric VLR.GG team identifier.
+
+    Returns:
+        Standard response dict with ``"segments"`` list of upcoming match dicts.
+    """
+    cache_key = ("team_upcoming", team_id)
+
+    async def build():
+        url = f"{VLR_BASE_URL}/team/{team_id}"
+        client = get_http_client()
+        resp = await fetch_with_retries(url, client=client)
+        status = resp.status_code
+
+        if status >= 400:
+            logger.warning(
+                "Non-200 response %d for team upcoming %s", status, team_id
+            )
+            raise HTTPException(
+                status_code=status,
+                detail=f"VLR.GG returned status {status} for team upcoming {team_id}",
+            )
+
+        html = parse_html(resp.text)
+        matches: list[dict] = []
+
+        # Upcoming matches sit in the upcoming section of the team page
+        # Try several possible selectors
+        selectors = [
+            "a.wf-card.m-item",
+            "a.m-item",
+            ".wf-card a.m-item",
+        ]
+        items = []
+        for sel in selectors:
+            items = html.css(sel)
+            if items:
+                break
+
+        if not items:
+            # Fallback: look in the main content column
+            content = html.css_first(".col.mod-1") or html.css_first(".col")
+            if content:
+                items = content.css("a[href*='/match/']")
+
+        for item in items:
+            parsed = _parse_team_upcoming_item(item)
+            if parsed is not None:
+                matches.append(parsed)
+
+        return {"data": {"status": status, "segments": matches}}
+
+    return await cache_manager.get_or_create_async(
+        CACHE_TTL_UPCOMING, build, *cache_key
     )
