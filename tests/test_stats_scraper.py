@@ -436,6 +436,22 @@ async def test_empty_region_returns_no_error_no_retry(monkeypatch):
     assert len(fetch.calls) == 2
 
 
+@pytest.mark.anyio
+async def test_tableless_empty_page_returns_empty_without_fallback_warning(monkeypatch, caplog):
+    """vlr.gg renders NO table at all for a zero-row result (e.g. sparse tier/span
+    windows). That is an empty result set, not legacy markup — no fallback warning."""
+    fetch = _install_fake_fetch(monkeypatch)
+    fetch.page_for_region = lambda region: (
+        f"<html><body>{_region_select(selected=region)}</body></html>"
+    )
+
+    with caplog.at_level(logging.WARNING, logger="api.scrapers.stats"):
+        data = await vlr_stats("americas", "60")
+
+    assert data["data"]["segments"] == []
+    assert not any("no data-col" in rec.message for rec in caplog.records)
+
+
 # ---------------------------------------------------------------------------
 # Region vocabulary
 # ---------------------------------------------------------------------------

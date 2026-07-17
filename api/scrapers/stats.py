@@ -234,7 +234,10 @@ async def vlr_stats(region_key: str, timespan: str):
                         f"{sorted(missing)} missing from header"
                     ),
                 )
-        else:
+        elif html.css_first("table") is not None:
+            # A table without data-col attributes is genuinely legacy markup. A page
+            # with NO table at all is a legitimately-empty result set (vlr.gg renders
+            # no table for zero rows, e.g. sparse tier/span windows) — stay quiet.
             logger.warning(
                 "VLR.GG /stats header has no data-col attributes; "
                 "falling back to legacy positional column indices"
