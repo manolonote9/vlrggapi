@@ -59,7 +59,7 @@ async def v2_news():
 
 @router.get("/stats", response_model=V2Response, summary="Player stats", description="Get player statistics for a region and timespan.")
 async def v2_stats(
-    region: str = Query(..., description="Region shortname (na, eu, ap, la, la-s, la-n, oce, kr, mn, gc, br, cn, jp, col)"),
+    region: str = Query(..., description="Region: all, americas, emea, pacific, china, intl (deprecated aliases: na/br -> americas, eu -> emea, ap/kr/jp/oce -> pacific, cn -> china)"),
     timespan: str = Query(..., description="Timespan: 30, 60, 90, or all"),
 ):
     result = await get_stats_data(region, timespan)

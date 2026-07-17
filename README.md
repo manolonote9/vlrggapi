@@ -186,8 +186,10 @@ GET /v2/rankings?region=na
 ### `GET /v2/stats`
 **Params:** `region` (required), `timespan` (required: 30/60/90/all) | **Cache:** 30 min
 
+**Regions** (the `/stats` page taxonomy, distinct from `/rankings`): `all`, `americas`, `emea`, `pacific`, `china`, `intl`. Deprecated aliases are still accepted and normalized: `na`/`br` → `americas`, `eu` → `emea`, `ap`/`kr`/`jp`/`oce` → `pacific`, `cn` → `china`.
+
 ```
-GET /v2/stats?region=na&timespan=30
+GET /v2/stats?region=americas&timespan=30
 ```
 
 <details><summary>Response</summary>
@@ -620,7 +622,7 @@ Preserved for backwards compatibility. Most return `{"data": {"status": int, "se
 </details>
 
 <details>
-<summary><code>GET /stats?region=na&timespan=30</code> — response example</summary>
+<summary><code>GET /stats?region=americas&timespan=30</code> — response example</summary>
 
 ```json
 {

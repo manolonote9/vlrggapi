@@ -59,20 +59,19 @@ async def VLR_news():
 
 @router.get("/stats")
 async def VLR_stats(
-    region: str = Query(..., description="Region shortname"),
+    region: str = Query(..., description="Region: all, americas, emea, pacific, china, intl (deprecated aliases accepted)"),
     timespan: str = Query(..., description="Timespan (30, 60, 90, or all)"),
 ):
     """
     Get VLR stats with query parameters.
 
-    region shortnames:\n
-        "na": "north-america",\n
-        "eu": "europe",\n
-        "ap": "asia-pacific",\n
-        "sa": "latin-america",\n
-        "jp": "japan",\n
-        "oce": "oceania",\n
-        "mn": "mena"\n
+    regions (the /stats page taxonomy — differs from /rankings):\n
+        all | americas | emea | pacific | china | intl\n
+    deprecated aliases (normalized):\n
+        na, br -> americas\n
+        eu -> emea\n
+        ap, kr, jp, oce -> pacific\n
+        cn -> china\n
     """
     return await get_stats_data(region, timespan)
 
