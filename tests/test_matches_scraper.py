@@ -69,6 +69,7 @@ class FakeResponse:
     def __init__(self, status_code: int, text: str):
         self.status_code = status_code
         self.text = text
+        self.content = text.encode("utf-8")
         self.headers: dict = {}
 
 
@@ -77,7 +78,7 @@ class FakeAsyncClient:
         self._responses = responses
         self.calls: list[tuple[str, int | None]] = []
 
-    async def get(self, url: str, timeout=None):
+    async def get(self, url: str, timeout=None, headers=None):
         self.calls.append((url, timeout))
         return self._responses[url].pop(0)
 
