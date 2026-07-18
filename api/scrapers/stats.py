@@ -27,7 +27,23 @@ def _parse_stats_row(item) -> dict:
     player_cell = item.css_first("td.mod-player")
 
     player_name = extract_text_content(player_cell.css_first(".text-of")) if player_cell else ""
-    org = extract_text_content(player_cell.css_first(".stats-player-country")) if player_cell else ""
+    org = ""
+    if player_cell:
+        name_el = player_cell.css_first(".text-of")
+        if name_el:
+            team_el = name_el.next
+            while team_el is not None and getattr(team_el, "tag", None) is None:
+                team_el = team_el.next
+            if team_el is not None:
+                org = extract_text_content(team_el)
+        if not org:
+            for sel in (".stats-player-country", ".ge-text-light",):
+                el = player_cell.css_first(sel)
+                if el:
+                    txt = extract_text_content(el)
+                    if txt and txt != player_name:
+                        org = txt
+                        break
     if not org:
         org = "N/A"
 
