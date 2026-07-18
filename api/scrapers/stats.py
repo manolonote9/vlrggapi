@@ -113,9 +113,10 @@ async def vlr_stats(region_key: str, timespan: str, event_id: str | None = None)
         validate_timespan(timespan)
 
         event_id_param = event_id if event_id else "all"
+        region_part = f"&region={region_key}" if region_key != "all" else ""
         base_url = (
             f"{VLR_STATS_URL}/?event_group_id=all&event_id={event_id_param}"
-            f"&region={region_key}&country=all&min_rounds=200"
+            f"{region_part}&country=all&min_rounds=200"
             f"&min_rating=1550&agent=all&map_id=all"
         )
         url = (

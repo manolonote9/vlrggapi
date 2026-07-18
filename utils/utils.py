@@ -18,4 +18,5 @@ region = {
     "cn": "china",
     "jp": "japan",
     "col": "collegiate",
+    "all": "all",
 }
