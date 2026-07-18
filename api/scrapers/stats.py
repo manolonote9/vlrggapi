@@ -21,29 +21,71 @@ def _cell_text(cells: list, index: int) -> str:
     return extract_text_content(cells[index])
 
 
-def _parse_stats_row(item) -> dict:
-    """Parse one stats table row using table-cell structure, not flattened text."""
+_STATS_FIELD_MAP = {
+    "rnd": "rounds_played",
+    "rating2": "rating",
+    "acs": "average_combat_score",
+    "kd": "kill_deaths",
+    "kast": "kill_assists_survived_traded",
+    "adr": "average_damage_per_round",
+    "kpr": "kills_per_round",
+    "apr": "assists_per_round",
+    "fbpr": "first_kills_per_round",
+    "fdpr": "first_deaths_per_round",
+    "hsp": "headshot_percentage",
+    "clp": "clutch_success_percentage",
+    "cl": "clutch_attempts",
+}
+
+REQUIRED_STATS_KEYS = frozenset({"rnd", "rating2", "acs", "kd", "adr"})
+
+_LEGACY_STATS_INDICES = {
+    "rounds_played": 2,
+    "rating": 3,
+    "average_combat_score": 4,
+    "kill_deaths": 5,
+    "kill_assists_survived_traded": 6,
+    "average_damage_per_round": 7,
+    "kills_per_round": 8,
+    "assists_per_round": 9,
+    "first_kills_per_round": 10,
+    "first_deaths_per_round": 11,
+    "headshot_percentage": 12,
+    "clutch_success_percentage": 13,
+    "clutch_attempts": 14,
+}
+
+
+def _build_column_map(html) -> dict | None:
+    header = html.css_first("thead tr")
+    if header is None:
+        return None
+    col_map: dict[str, int] = {}
+    for index, th in enumerate(header.css("th")):
+        data_col = th.attributes.get("data-col")
+        if data_col:
+            col_map[data_col] = index
+    return col_map or None
+
+
+def _cell_text(cells: list, index: int | None) -> str:
+    if index is None or index >= len(cells):
+        return ""
+    return extract_text_content(cells[index])
+
+
+def _parse_stats_row(item, col_map: dict | None = None) -> dict:
     cells = item.css("td")
     player_cell = item.css_first("td.mod-player")
 
     player_name = extract_text_content(player_cell.css_first(".text-of")) if player_cell else ""
-    org = ""
+    org_cell = None
     if player_cell:
-        name_el = player_cell.css_first(".text-of")
-        if name_el:
-            team_el = name_el.next
-            while team_el is not None and getattr(team_el, "tag", None) is None:
-                team_el = team_el.next
-            if team_el is not None:
-                org = extract_text_content(team_el)
-        if not org:
-            for sel in (".stats-player-country", ".ge-text-light",):
-                el = player_cell.css_first(sel)
-                if el:
-                    txt = extract_text_content(el)
-                    if txt and txt != player_name:
-                        org = txt
-                        break
+        org_cell = (
+            player_cell.css_first(".st-pl-country")
+            or player_cell.css_first(".stats-player-country")
+        )
+    org = extract_text_content(org_cell) if org_cell else ""
     if not org:
         org = "N/A"
 
@@ -54,24 +96,14 @@ def _parse_stats_row(item) -> dict:
             continue
         agents.append(src.split("/")[-1].split(".")[0])
 
-    return {
-        "player": player_name,
-        "org": org,
-        "agents": agents,
-        "rounds_played": _cell_text(cells, 2),
-        "rating": _cell_text(cells, 3),
-        "average_combat_score": _cell_text(cells, 4),
-        "kill_deaths": _cell_text(cells, 5),
-        "kill_assists_survived_traded": _cell_text(cells, 6),
-        "average_damage_per_round": _cell_text(cells, 7),
-        "kills_per_round": _cell_text(cells, 8),
-        "assists_per_round": _cell_text(cells, 9),
-        "first_kills_per_round": _cell_text(cells, 10),
-        "first_deaths_per_round": _cell_text(cells, 11),
-        "headshot_percentage": _cell_text(cells, 12),
-        "clutch_success_percentage": _cell_text(cells, 13),
-        "clutch_attempts": _cell_text(cells, 14),
-    }
+    row = {"player": player_name, "org": org, "agents": agents}
+    if col_map is not None:
+        for data_col, out_key in _STATS_FIELD_MAP.items():
+            row[out_key] = _cell_text(cells, col_map.get(data_col))
+    else:
+        for out_key, index in _LEGACY_STATS_INDICES.items():
+            row[out_key] = _cell_text(cells, index)
+    return row
 
 
 @handle_scraper_errors
@@ -99,9 +131,11 @@ async def vlr_stats(region_key: str, timespan: str, event_id: str | None = None)
 
         html = parse_html(resp.text)
 
+        col_map = _build_column_map(html)
+
         result = []
         for item in html.css("tbody tr"):
-            parsed = _parse_stats_row(item)
+            parsed = _parse_stats_row(item, col_map)
             if parsed["player"]:
                 result.append(parsed)
 

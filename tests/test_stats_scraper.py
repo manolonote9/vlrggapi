@@ -7,12 +7,31 @@ from utils.cache_manager import cache_manager
 STATS_HTML = """
 <html>
   <table>
+    <thead>
+      <tr>
+        <th></th>
+        <th data-col="agents">Agents</th>
+        <th data-col="rnd">Rounds</th>
+        <th data-col="rating2">Rating 2.0</th>
+        <th data-col="acs">ACS</th>
+        <th data-col="kd">K/D</th>
+        <th data-col="kast">KAST</th>
+        <th data-col="adr">ADR</th>
+        <th data-col="kpr">KPR</th>
+        <th data-col="apr">APR</th>
+        <th data-col="fbpr">FK/FR</th>
+        <th data-col="fdpr">FD/FR</th>
+        <th data-col="hsp">HS%</th>
+        <th data-col="clp">CL%</th>
+        <th data-col="cl">CL</th>
+      </tr>
+    </thead>
     <tbody>
       <tr>
         <td class="mod-player mod-a">
           <a>
             <div class="text-of">TenZ Prime</div>
-            <div class="stats-player-country">Team Liquid</div>
+            <div class="st-pl-country">Team Liquid</div>
           </a>
         </td>
         <td class="mod-agents">
