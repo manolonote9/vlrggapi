@@ -17,7 +17,11 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_event_header(html: HTMLParser) -> dict:
-    """Extract event name, series, dates, prize pool, location, and logo."""
+    """Extract event name, series, dates, prize pool, location, and logo.
+
+    Supports both the new VLR layout (event-header-main) and the legacy
+    layout (event-desc-inner / event-desc-item).
+    """
     series = ""
     name = ""
     subtitle = ""
@@ -35,37 +39,67 @@ def _parse_event_header(html: HTMLParser) -> dict:
     if logo_elem:
         logo = normalize_image_url(logo_elem.attributes.get("src", ""))
 
-    # Series link (first anchor inside .event-desc-inner before the h1)
-    desc_inner = header.css_first(".event-desc-inner")
-    if desc_inner:
-        series_link = desc_inner.css_first("a")
-        if series_link:
-            series = extract_text_content(series_link)
+    main = header.css_first(".event-header-main")
+    if main:
+        bc = main.css_first(".event-header-main-bc")
+        if bc:
+            series_link = bc.css_first("a")
+            if series_link:
+                series = extract_text_content(series_link)
 
-    # Event name
-    title = header.css_first("h1.wf-title")
-    if title:
-        name = extract_text_content(title)
+        title = main.css_first("h1.event-header-main-title")
+        if title:
+            name = extract_text_content(title)
 
-    # Subtitle
-    sub = header.css_first(".event-desc-subtitle")
-    if sub:
-        subtitle = extract_text_content(sub)
+        sub = main.css_first("h2.event-header-main-desc")
+        if sub:
+            subtitle = extract_text_content(sub)
 
-    # Key-value items (dates, prize, location)
-    for item in header.css(".event-desc-item"):
-        label_elem = item.css_first(".event-desc-item-label")
-        value_elem = item.css_first(".event-desc-item-value")
-        if not label_elem or not value_elem:
-            continue
-        label = extract_text_content(label_elem).rstrip(":")
-        value = extract_text_content(value_elem)
-        if label.lower() == "dates":
-            dates = value
-        elif label.lower() == "prize":
-            prize = value
-        elif label.lower() in ("location", "venue"):
-            location = value
+        meta = main.css_first(".event-header-main-meta")
+        if meta:
+            child = meta.child
+            while child is not None:
+                if hasattr(child, 'tag') and child.tag == "div":
+                    label_elem = child.css_first(".label")
+                    if label_elem:
+                        label = extract_text_content(label_elem).rstrip(":").lower()
+                        value_elem = child.css_first(".value")
+                        value = extract_text_content(value_elem) if value_elem else ""
+                        if label == "dates":
+                            dates = value
+                        elif label == "prize":
+                            prize = value
+                        elif label in ("location", "venue"):
+                            location = value
+                child = child.next
+    else:
+        desc_inner = header.css_first(".event-desc-inner")
+        if desc_inner:
+            series_link = desc_inner.css_first("a")
+            if series_link:
+                series = extract_text_content(series_link)
+
+        title = header.css_first("h1.wf-title")
+        if title:
+            name = extract_text_content(title)
+
+        sub = header.css_first(".event-desc-subtitle")
+        if sub:
+            subtitle = extract_text_content(sub)
+
+        for item in header.css(".event-desc-item"):
+            label_elem = item.css_first(".event-desc-item-label")
+            value_elem = item.css_first(".event-desc-item-value")
+            if not label_elem or not value_elem:
+                continue
+            label = extract_text_content(label_elem).rstrip(":")
+            value = extract_text_content(value_elem)
+            if label.lower() == "dates":
+                dates = value
+            elif label.lower() == "prize":
+                prize = value
+            elif label.lower() in ("location", "venue"):
+                location = value
 
     return {
         "name": name,

@@ -178,28 +178,139 @@ def _parse_streams_vods(html: HTMLParser) -> tuple[list[dict], list[dict]]:
 # Per-map game data parsers
 # ---------------------------------------------------------------------------
 
-def _parse_player_row(cells: list) -> dict:
-    """
-    Parse a single player table row into a stat dict.
+def _parse_player_row_div(player_cell, stat_cells: list) -> dict:
+    """Parse a single player from the new ovw-cell div-based layout.
 
-    Actual VLR column layout (14 cells):
-      [0]  mod-player   — player name
-      [1]  mod-agents   — agent icon (img title)
-      [2]  mod-stat     — rating
-      [3]  mod-stat     — ACS
-      [4]  mod-vlr-kills — kills
-      [5]  mod-vlr-deaths — deaths
-      [6]  mod-vlr-assists — assists
-      [7]  mod-kd-diff  — K/D +/-
-      [8]  mod-stat     — KAST
-      [9]  mod-stat     — ADR
-      [10] mod-stat     — HS%
-      [11] mod-fb       — first kills
-      [12] mod-fd       — first deaths
-      [13] mod-fk-diff  — FK +/-
+    Each player occupies 11 consecutive ``.ovw-cell`` divs: a ``mod-player``
+    cell with name / agent, followed by 10 stat cells keyed by ``data-col``
+    (rating2, acs, kills, kd-diff, kast, adr, hsp, fb, fd, fk-diff).
 
-    Values are in .side.mod-both spans or direct text.
+    The ``data-col="kills"`` cell is special: it uses ``.mod-kda`` and
+    contains kills / deaths / assists inside ``.ovw-kda-stat`` sub-elements.
     """
+    player_name = ""
+    agent = ""
+
+    name_elem = player_cell.css_first(".ovw-player-name")
+    if name_elem:
+        player_name = extract_text_content(name_elem)
+
+    agents = player_cell.css_first(".ovw-agents")
+    if agents:
+        img = agents.css_first("img")
+        if img:
+            agent = img.attributes.get("title", "") or img.attributes.get("alt", "")
+
+    stats: dict[str, str] = {}
+    kills = deaths = assists = ""
+    for cell in stat_cells:
+        cls = cell.attributes.get("class", "") or ""
+        if "mod-kda" in cls:
+            kda_stats = cell.css(".ovw-kda-stat")
+            for ks in kda_stats:
+                kdc = ks.attributes.get("data-col", "")
+                both = ks.css_first(".side.mod-both")
+                val = both.text(strip=True) if both else ""
+                if kdc == "kills":
+                    kills = val
+                elif kdc == "deaths":
+                    deaths = val
+                elif kdc == "assists":
+                    assists = val
+            continue
+
+        data_col = cell.attributes.get("data-col", "")
+        if not data_col:
+            continue
+        both = cell.css_first(".side.mod-both")
+        if both:
+            stats[data_col] = both.text(strip=True)
+        else:
+            stats[data_col] = cell.text(strip=True)
+
+    return {
+        "name": player_name,
+        "agent": agent,
+        "rating": stats.get("rating2", ""),
+        "acs": stats.get("acs", ""),
+        "kills": kills or stats.get("kills", ""),
+        "deaths": deaths,
+        "assists": assists,
+        "kd_diff": stats.get("kd-diff", ""),
+        "kast": stats.get("kast", ""),
+        "adr": stats.get("adr", ""),
+        "hs_pct": stats.get("hsp", ""),
+        "fk": stats.get("fb", ""),
+        "fd": stats.get("fd", ""),
+        "fk_diff": stats.get("fk-diff", ""),
+    }
+
+
+def _parse_map_players(game_elem) -> dict:
+    """Parse per-team player stats from the ovw-cell div-based layout.
+
+    VLR now renders player stats as a flat sequence of ``.ovw-cell`` divs.
+    Each player uses 11 cells: ``.ovw-cell.mod-player`` (name + agent)
+    followed by 10 stat cells. The first 5 players are team 1, the next 5
+    are team 2. Falls back to the old ``table.wf-table-inset.mod-overview``
+    format when present.
+    """
+    team1_players: list[dict] = []
+    team2_players: list[dict] = []
+
+    all_cells = game_elem.css(".ovw-cell")
+    player_cells = [c for c in all_cells if "mod-player" in (c.attributes.get("class", "") or "")]
+    non_player_cells = [c for c in all_cells if "mod-player" not in (c.attributes.get("class", "") or "")]
+
+    player_count = len(player_cells)
+    stats_per_player = len(non_player_cells) // max(player_count, 1)
+
+    def parse_players_from_range(start: int, count: int) -> list[dict]:
+        players = []
+        for i in range(count):
+            pi = start + i
+            if pi >= player_count:
+                break
+            stat_start = (start + i) * stats_per_player
+            stat_group = non_player_cells[stat_start:stat_start + stats_per_player]
+            try:
+                players.append(_parse_player_row_div(player_cells[pi], stat_group))
+            except Exception as exc:
+                logger.debug("Skipping player row due to parse error: %s", exc)
+        return players
+
+    if player_count >= 2:
+        half = player_count // 2
+        team1_players = parse_players_from_range(0, half)
+        team2_players = parse_players_from_range(half, player_count - half)
+
+    if not team1_players and not team2_players:
+        tables = game_elem.css("table.wf-table-inset.mod-overview")
+
+        def parse_table_rows(table) -> list[dict]:
+            players = []
+            for row in table.css("tbody tr"):
+                cells = row.css("td")
+                if not cells or len(cells) < 5:
+                    continue
+                try:
+                    p = _parse_player_row_table(cells)
+                    if p["name"]:
+                        players.append(p)
+                except Exception as exc:
+                    logger.debug("Skipping player row: %s", exc)
+            return players
+
+        if len(tables) >= 1:
+            team1_players = parse_table_rows(tables[0])
+        if len(tables) >= 2:
+            team2_players = parse_table_rows(tables[1])
+
+    return {"team1": team1_players, "team2": team2_players}
+
+
+def _parse_player_row_table(cells: list) -> dict:
+    """Legacy parser for old table-based player stats (14 <td> cells)."""
 
     def cell_val(cell) -> str:
         if not cell:
@@ -245,44 +356,12 @@ def _parse_player_row(cells: list) -> dict:
     }
 
 
-def _parse_map_players(game_elem) -> dict:
-    """
-    Parse player stat tables inside a single .vm-stats-game element.
-
-    VLR.GG renders two back-to-back <table> blocks inside
-    .vm-stats-container — one per team. We treat each table
-    as one team's roster.
-    """
-    team1_players: list[dict] = []
-    team2_players: list[dict] = []
-
-    tables = game_elem.css("table.wf-table-inset.mod-overview")
-
-    def parse_table_rows(table) -> list[dict]:
-        players = []
-        for row in table.css("tbody tr"):
-            cells = row.css("td")
-            if not cells:
-                continue
-            if len(cells) < 5:
-                continue
-            try:
-                players.append(_parse_player_row(cells))
-            except Exception as exc:
-                logger.debug("Skipping player row due to parse error: %s", exc)
-        return players
-
-    if len(tables) >= 1:
-        team1_players = parse_table_rows(tables[0])
-    if len(tables) >= 2:
-        team2_players = parse_table_rows(tables[1])
-
-    return {"team1": team1_players, "team2": team2_players}
-
-
 def _parse_map_scores(game_elem) -> dict:
     """
     Extract team scores and CT/T/OT splits from a single game header.
+
+    Updated for new VLR layout where the first team has the score on the
+    left (before the map column) and the second team on the right.
     """
     result = {
         "score": {"team1": "", "team2": ""},
@@ -309,17 +388,40 @@ def _parse_map_scores(game_elem) -> dict:
             except (ValueError, TypeError):
                 result["score"][key] = val
 
-        ct_el = block.css_first(".mod-ct")
-        if ct_el:
-            result["score_ct"][key] = ct_el.text(strip=True)
+        ct_els = block.css(".mod-ct")
+        ct_val = ""
+        for ct in ct_els:
+            txt = ct.text(strip=True)
+            if txt and ct.tag != "span":
+                ct_val = txt
+        if not ct_val:
+            for ct in ct_els:
+                if ct.tag == "span":
+                    ct_val = ct.text(strip=True)
+                    break
+        result["score_ct"][key] = ct_val
 
-        t_el = block.css_first(".mod-t")
-        if t_el:
-            result["score_t"][key] = t_el.text(strip=True)
+        t_els = block.css(".mod-t")
+        t_val = ""
+        for t in t_els:
+            txt = t.text(strip=True)
+            if txt and t.tag != "span":
+                t_val = txt
+        if not t_val:
+            for t in t_els:
+                if t.tag == "span":
+                    t_val = t.text(strip=True)
+                    break
+        result["score_t"][key] = t_val
 
-        ot_el = block.css_first(".mod-ot")
-        if ot_el:
-            result["score_ot"][key] = ot_el.text(strip=True)
+        ot_els = block.css(".mod-ot")
+        ot_val = ""
+        for ot in ot_els:
+            txt = ot.text(strip=True)
+            if txt:
+                ot_val = txt
+                break
+        result["score_ot"][key] = ot_val
 
     return result
 
@@ -380,17 +482,15 @@ def _parse_maps(html: HTMLParser) -> list[dict]:
         picked_by = ""
         map_container = game_elem.css_first(".vm-stats-game-header .map")
         if map_container:
-            pick_elem = map_container.css_first(".picked") or map_container.css_first(".pick")
-            dur_elem = map_container.css_first(".map-duration")
-            if pick_elem:
-                picked_by = pick_elem.text(strip=True)
-            full_text = map_container.text(strip=True)
-            subtract = ""
-            if pick_elem:
-                subtract += pick_elem.text(strip=True)
-            if dur_elem:
-                subtract += dur_elem.text(strip=True)
-            map_name = re.sub(r"\s+", " ", full_text.replace(subtract, "")).strip()
+            spans = map_container.css("span")
+            for span in spans:
+                txt = span.text(strip=True)
+                if txt and txt.lower() not in ("",) and not txt.lower().startswith("pick"):
+                    map_name = txt
+                    break
+            if not map_name:
+                map_name = map_container.text(strip=True).split("\n")[0].strip()
+                map_name = re.sub(r"\s*\d{1,2}:\d{2}(?::\d{2})?\s*$", "", map_name).strip()
 
         duration = ""
         dur_elem = game_elem.css_first(".map-duration")
@@ -421,40 +521,80 @@ def _parse_maps(html: HTMLParser) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def _parse_head_to_head(html: HTMLParser) -> list[dict]:
-    """Parse head-to-head match history entries."""
+    """Parse head-to-head match history from the new VLR layout.
+
+    VLR now renders past encounters as ``.match-histories-item`` anchors
+    directly in the page, not nested inside ``.match-h2h-matches``. Results
+    carry ``.match-histories-item-result`` with ``mod-win`` / ``mod-loss``
+    and ``.rf`` / ``.ra`` score spans.
+    Falls back to the old ``.match-h2h-matches .wf-module-item`` format.
+    """
     h2h: list[dict] = []
 
-    container = html.css_first(".match-h2h-matches")
-    if not container:
-        return h2h
+    items = html.css(".match-histories-item")
+    if not items:
+        container = html.css_first(".match-h2h-matches")
+        if container:
+            items = container.css(".wf-module-item")
 
-    for row in container.css(".wf-module-item"):
-        team_elems = row.css(".match-h2h-matches-team")
-        teams = []
-        for te in team_elems:
-            cls = te.attributes.get("class", "")
+    for row in items:
+        result_elem = row.css_first(".match-histories-item-result")
+        if result_elem:
+            cls = result_elem.attributes.get("class", "") or ""
             is_winner = "mod-win" in cls
-            teams.append({"name": extract_text_content(te), "is_winner": is_winner})
+            score_rf = extract_text_content(result_elem.css_first(".rf"))
+            score_ra = extract_text_content(result_elem.css_first(".ra"))
+            score = f"{score_rf} - {score_ra}"
 
-        score_elem = row.css_first(".match-h2h-matches-score")
-        score = extract_text_content(score_elem) if score_elem else ""
+            opp_elem = row.css_first(".match-histories-item-opponent-name")
+            opponent = extract_text_content(opp_elem) if opp_elem else ""
 
-        event_elem = row.css_first(".match-h2h-matches-event-name")
-        event = extract_text_content(event_elem) if event_elem else ""
+            date_elem = row.css_first(".match-histories-item-date")
+            date = extract_text_content(date_elem) if date_elem else ""
 
-        date_elem = row.css_first(".match-h2h-matches-date")
-        date = extract_text_content(date_elem) if date_elem else ""
+            href = row.attributes.get("href", "")
+            url = build_full_url(href)
 
-        href = row.attributes.get("href", "")
-        url = build_full_url(href)
+            teams = [
+                {"name": "", "is_winner": is_winner},
+                {"name": opponent, "is_winner": not is_winner},
+            ]
 
-        h2h.append({
-            "event": event,
-            "date": date,
-            "teams": teams,
-            "score": score,
-            "url": url,
-        })
+            h2h.append({
+                "event": "",
+                "date": date,
+                "teams": teams,
+                "score": score,
+                "url": url,
+            })
+        else:
+            # Old format: .match-h2h-matches rows
+            team_elems = row.css(".match-h2h-matches-team")
+            teams = []
+            for te in team_elems:
+                cls = te.attributes.get("class", "")
+                is_winner = "mod-win" in cls
+                teams.append({"name": extract_text_content(te), "is_winner": is_winner})
+
+            score_elem = row.css_first(".match-h2h-matches-score")
+            score = extract_text_content(score_elem) if score_elem else ""
+
+            event_elem = row.css_first(".match-h2h-matches-event-name")
+            event = extract_text_content(event_elem) if event_elem else ""
+
+            date_elem = row.css_first(".match-h2h-matches-date")
+            date = extract_text_content(date_elem) if date_elem else ""
+
+            href = row.attributes.get("href", "")
+            url = build_full_url(href)
+
+            h2h.append({
+                "event": event,
+                "date": date,
+                "teams": teams,
+                "score": score,
+                "url": url,
+            })
 
     return h2h
 
