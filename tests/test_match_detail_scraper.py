@@ -48,6 +48,39 @@ BASE_MATCH_HTML = f"""
       <div class="team"><div class="score">13</div><div class="mod-ct">7</div><div class="mod-t">6</div></div>
       <div class="team"><div class="score">11</div><div class="mod-ct">5</div><div class="mod-t">6</div></div>
     </div>
+    <div style="text-align: center; margin-top: 15px;">
+      <div style="overflow-x: auto; text-align: center;">
+        <div class="vlr-rounds">
+          <div class="vlr-rounds-row">
+            <div class="vlr-rounds-row-col">
+              <div style="height: 12px;"></div>
+              <div class="team"><img src="//owcdn.net/img/1.png">ONE</div>
+              <div class="team"><img src="//owcdn.net/img/2.png">TWO</div>
+            </div>
+            <div class="vlr-rounds-row-col" title="1-0">
+              <div class="rnd-num">1</div>
+              <div class="rnd-sq mod-win mod-ct"><img src="/img/vlr/game/round/elim.webp"></div>
+              <div class="rnd-sq"></div>
+            </div>
+            <div class="vlr-rounds-row-col" title="2-0">
+              <div class="rnd-num">2</div>
+              <div class="rnd-sq mod-win mod-ct"><img src="/img/vlr/game/round/defuse.webp"></div>
+              <div class="rnd-sq"></div>
+            </div>
+            <div class="vlr-rounds-row-col" title="2-1">
+              <div class="rnd-num">3</div>
+              <div class="rnd-sq"></div>
+              <div class="rnd-sq mod-win mod-t"><img src="/img/vlr/game/round/boom.webp"></div>
+            </div>
+            <div class="vlr-rounds-row-col" title="3-1">
+              <div class="rnd-num">4</div>
+              <div class="rnd-sq mod-win mod-t"><img src="/img/vlr/game/round/time.webp"></div>
+              <div class="rnd-sq"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
     <table class="wf-table-inset mod-overview"><tbody>{PLAYER_ROW}</tbody></table>
     <table class="wf-table-inset mod-overview"><tbody>{PLAYER_ROW}</tbody></table>
   </div>
@@ -175,6 +208,13 @@ async def test_vlr_match_detail_fetches_performance_and_economy_for_all_games(mo
         "advanced_stats": [{"player": "TenZ", "2K": "3"}],
     }
     assert segment["maps"][1]["economy"] == [{"Team": "Team Two", "Pistol": "50%"}]
+    assert segment["maps"][0]["rounds"] == [
+        {"round_num": 1, "winner": "team1", "side": "ct", "type": "elim"},
+        {"round_num": 2, "winner": "team1", "side": "ct", "type": "defuse"},
+        {"round_num": 3, "winner": "team2", "side": "t", "type": "boom"},
+        {"round_num": 4, "winner": "team1", "side": "t", "type": "time"},
+    ]
+    assert segment["maps"][1]["rounds"] == []
     assert len(client.calls) == 5
     cache_manager.clear_all()
 

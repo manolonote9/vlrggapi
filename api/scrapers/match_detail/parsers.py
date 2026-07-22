@@ -450,6 +450,7 @@ def _parse_rounds(game_elem) -> list[dict]:
 
             winner = ""
             winning_side = ""
+            round_type = ""
             for idx, sq in enumerate(sqs):
                 sq_cls = sq.attributes.get("class", "")
                 if "mod-win" in sq_cls:
@@ -458,12 +459,19 @@ def _parse_rounds(game_elem) -> list[dict]:
                         winning_side = "ct"
                     elif "mod-t" in sq_cls:
                         winning_side = "t"
+
+                    img = sq.css_first("img")
+                    if img:
+                        src = img.attributes.get("src", "")
+                        round_type = src.rsplit("/", 1)[-1].rsplit(".", 1)[0] if src else ""
+
                     break
 
             rounds.append({
                 "round_num": round_num,
                 "winner": winner,
                 "side": winning_side,
+                "type": round_type,
             })
 
     return rounds
