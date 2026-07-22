@@ -12,6 +12,7 @@ from utils.constants import (
     MAX_MATCH_PAGE_WINDOW,
     MAX_MATCH_RETRIES,
     MAX_MATCH_TIMEOUT,
+    STATS_REGIONS,
 )
 from utils.http_client import CircuitOpenError
 from utils.utils import region
@@ -93,6 +94,42 @@ def validate_region(key: str) -> str:
             detail=f"Invalid region '{key}'. Valid regions: {', '.join(sorted(region.keys()))}",
         )
     return region[key]
+
+
+# Deprecated /stats region aliases -> canonical value. vlr.gg retired the
+# na|eu|ap|... vocabulary on its /stats page (it still applies to /rankings), so
+# these are normalized instead of rejected to keep legacy callers working.
+STATS_REGION_ALIASES = {
+    "na": "americas",
+    "br": "americas",
+    "eu": "emea",
+    "ap": "pacific",
+    "kr": "pacific",
+    "jp": "pacific",
+    "oce": "pacific",
+    "cn": "china",
+}
+
+
+def validate_stats_region(key: str) -> str:
+    """Validate and normalize a /stats region key to its canonical value.
+
+    The /stats page taxonomy (all|americas|emea|pacific|china|intl) differs from
+    /rankings. Legacy /rankings shortnames (na, eu, ap, kr, jp, oce, br, cn) are
+    accepted as deprecated aliases and normalized to their canonical /stats value.
+    Anything else (la, la-s, la-n, mn, gc, col, ...) raises 400. Used ONLY by the
+    /stats path; validate_region remains the /rankings contract.
+    """
+    normalized = STATS_REGION_ALIASES.get(key, key)
+    if normalized not in STATS_REGIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid region '{key}'. Valid regions: "
+                f"{', '.join(sorted(STATS_REGIONS))}"
+            ),
+        )
+    return normalized
 
 
 def validate_timespan(ts: str):

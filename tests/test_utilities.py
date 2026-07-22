@@ -217,6 +217,7 @@ class FakeResponse:
     def __init__(self, status_code: int, text: str = "<html></html>", headers: dict | None = None):
         self.status_code = status_code
         self.text = text
+        self.content = text.encode("utf-8") if len(text) >= 100 else (text + "x" * 100).encode("utf-8")
         self.headers = headers or {}
 
 
@@ -225,7 +226,7 @@ class FakeAsyncClient:
         self._responses = responses
         self.calls: list[tuple[str, int | None]] = []
 
-    async def get(self, url: str, timeout=None):
+    async def get(self, url: str, timeout=None, headers=None):
         self.calls.append((url, timeout))
         response = self._responses[url].pop(0)
         if isinstance(response, Exception):
@@ -397,7 +398,7 @@ async def test_vlr_match_detail_does_not_cache_non_200_responses(monkeypatch):
         }
     )
 
-    monkeypatch.setattr("api.scrapers.match_detail.get_http_client", lambda: client)
+    monkeypatch.setattr("api.scrapers.match_detail.crawler.get_http_client", lambda: client)
 
     first = await vlr_match_detail("123")
     second = await vlr_match_detail("123")

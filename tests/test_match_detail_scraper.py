@@ -95,6 +95,7 @@ class FakeResponse:
     def __init__(self, status_code: int, text: str):
         self.status_code = status_code
         self.text = text
+        self.content = text.encode("utf-8")
         self.headers: dict = {}
 
 
@@ -103,7 +104,7 @@ class FakeAsyncClient:
         self._responses = responses
         self.calls: list[tuple[str, int | None]] = []
 
-    async def get(self, url: str, timeout=None):
+    async def get(self, url: str, timeout=None, headers=None):
         self.calls.append((url, timeout))
         return self._responses[url].pop(0)
 
@@ -121,7 +122,7 @@ async def test_vlr_match_detail_fetches_performance_and_economy_for_all_games(mo
         }
     )
 
-    monkeypatch.setattr("api.scrapers.match_detail.get_http_client", lambda: client)
+    monkeypatch.setattr("api.scrapers.match_detail.crawler.get_http_client", lambda: client)
 
     data = await vlr_match_detail("555")
     segment = data["data"]["segments"][0]
@@ -210,12 +211,12 @@ async def test_vlr_match_detail_limits_tab_fetches_and_falls_back_on_tab_error(m
         finally:
             active_fetches -= 1
 
-    monkeypatch.setattr("api.scrapers.match_detail.get_http_client", lambda: object())
+    monkeypatch.setattr("api.scrapers.match_detail.crawler.get_http_client", lambda: object())
     monkeypatch.setattr(
-        "api.scrapers.match_detail.fetch_with_retries", fake_fetch_with_retries
+        "api.scrapers.match_detail.crawler.fetch_with_retries", fake_fetch_with_retries
     )
-    monkeypatch.setattr("api.scrapers.match_detail.MATCH_DETAIL_TAB_FETCH_CONCURRENCY", 2)
-    monkeypatch.setattr("api.scrapers.match_detail.MATCH_DETAIL_TAB_FETCH_TIMEOUT", 11)
+    monkeypatch.setattr("api.scrapers.match_detail.crawler.MATCH_DETAIL_TAB_FETCH_CONCURRENCY", 2)
+    monkeypatch.setattr("api.scrapers.match_detail.crawler.MATCH_DETAIL_TAB_FETCH_TIMEOUT", 11)
 
     data = await vlr_match_detail("888")
     segment = data["data"]["segments"][0]
@@ -256,7 +257,7 @@ async def test_vlr_match_detail_uses_empty_team_id_when_header_link_is_missing(m
         }
     )
 
-    monkeypatch.setattr("api.scrapers.match_detail.get_http_client", lambda: client)
+    monkeypatch.setattr("api.scrapers.match_detail.crawler.get_http_client", lambda: client)
 
     data = await vlr_match_detail("777")
     teams = data["data"]["segments"][0]["teams"]

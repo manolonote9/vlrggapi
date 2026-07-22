@@ -2,17 +2,18 @@ import pytest
 from fastapi import HTTPException
 
 from api.scrapers.teams import (
-    _extract_prize_from_text,
     vlr_team,
     vlr_team_matches,
     vlr_team_transactions,
 )
+from api.scrapers.teams.parsers import _extract_prize_from_text
 
 
 class FakeResponse:
     def __init__(self, status_code: int, text: str = "<html></html>"):
         self.status_code = status_code
         self.text = text
+        self.content = text.encode("utf-8")
         self.headers: dict = {}
 
 
@@ -21,7 +22,7 @@ class FakeAsyncClient:
         self.response = response
         self.calls: list[tuple[str, int | None]] = []
 
-    async def get(self, url: str, timeout=None):
+    async def get(self, url: str, timeout=None, headers=None):
         self.calls.append((url, timeout))
         return self.response
 
@@ -65,7 +66,7 @@ async def test_team_scrapers_raise_http_errors_for_upstream_failures(
 ):
     client = FakeAsyncClient(FakeResponse(expected_status))
 
-    monkeypatch.setattr("api.scrapers.teams.get_http_client", lambda: client)
+    monkeypatch.setattr("api.scrapers.teams.crawlers.get_http_client", lambda: client)
 
     with pytest.raises(HTTPException) as exc_info:
         await scraper(*args)

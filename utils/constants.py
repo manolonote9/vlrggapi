@@ -27,6 +27,10 @@ MIN_PAGE_LIMIT = 1
 DEFAULT_TIMEOUT = 30
 DEFAULT_RETRIES = 3
 DEFAULT_REQUEST_DELAY = 1.0
+MIN_RESPONSE_SIZE = 100
+
+# Pagination concurrency
+PAGINATION_SEMAPHORE_LIMIT = 4
 
 # Circuit breaker
 CIRCUIT_FAIL_MAX = 5
@@ -66,3 +70,10 @@ CACHE_TTL_TEAM_HISTORY = 1800
 CACHE_TTL_TEAM_UPCOMING = 300
 CACHE_TTL_EVENT_MATCHES = 600
 CACHE_TTL_HEALTH_UPSTREAM = 60
+
+# /stats region vocabulary
+# The /stats page uses a DIFFERENT region taxonomy from /rankings. vlr.gg's
+# <select name="region"> offers exactly these canonical values; any other value
+# silently falls back to "all". Kept separate from utils.utils.region (the
+# /rankings contract) so /rankings?region=americas still returns 400.
+STATS_REGIONS = frozenset({"all", "americas", "emea", "pacific", "china", "intl"})

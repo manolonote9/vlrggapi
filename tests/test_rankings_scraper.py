@@ -21,6 +21,8 @@ RANKINGS_HTML = """
           <div class="rank-item-team-country">United States</div>
         </div>
       </a>
+      <div class="rank-item-rating">1916</div>
+      <div class="rank-item-streak"><span>1L</span></div>
       <a data-sort-value="9172" class="rank-item-last fc-flex" href="/626550/example-match">
         <div>6d ago</div>
         <div>
@@ -62,6 +64,7 @@ class FakeResponse:
     def __init__(self, status_code: int, text: str):
         self.status_code = status_code
         self.text = text
+        self.content = text.encode("utf-8")
         self.headers: dict = {}
 
 
@@ -70,7 +73,7 @@ class FakeAsyncClient:
         self.response = response
         self.calls = []
 
-    async def get(self, url: str, timeout=None):
+    async def get(self, url: str, timeout=None, headers=None):
         self.calls.append((url, timeout))
         return self.response
 
@@ -92,10 +95,13 @@ async def test_vlr_rankings_preserves_current_output_shape(monkeypatch):
                     "rank": "1",
                     "team": "NRG",
                     "country": "United States",
+                    "rating": "1916",
+                    "streak": "1L",
                     "last_played": "6d ago",
                     "last_played_team": "vs. Paper Rex",
                     "last_played_team_logo": "//owcdn.net/img/opponent.png",
                     "record": "47-24",
+                    "recent_record": "166-85",
                     "earnings": "$2,125,500",
                     "logo": "//owcdn.net/img/team.png",
                 }

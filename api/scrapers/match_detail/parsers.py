@@ -1,29 +1,19 @@
 """
-Scraper for individual VLR.GG match detail pages.
-Fetches the base match page plus performance and economy tabs concurrently.
+HTML parsers for VLR.GG match detail page components.
+
+Covers header parsing, per-map game stats, head-to-head history,
+performance tab (kill matrix + advanced), and economy tab.
 """
-import asyncio
 import logging
 import re
 
-from utils.cache_manager import cache_manager
-from utils.constants import (
-    CACHE_TTL_MATCH_DETAIL,
-    CACHE_TTL_MATCH_DETAIL_LIVE,
-    MATCH_DETAIL_TAB_FETCH_CONCURRENCY,
-    MATCH_DETAIL_TAB_FETCH_TIMEOUT,
-    VLR_BASE_URL,
-)
-from utils.error_handling import handle_scraper_errors, upstream_error_payload
 from utils.html_parsers import (
     HTMLParser,
     build_full_url,
     extract_text_content,
     normalize_image_url,
     parse_href_id_slug,
-    parse_html,
 )
-from utils.http_client import fetch_with_retries, get_http_client
 from utils.id_mapper import id_mapper
 
 logger = logging.getLogger(__name__)
@@ -41,7 +31,6 @@ def _parse_event_info(html: HTMLParser) -> dict:
 
     super_elem = html.css_first(".match-header-super")
     if super_elem:
-        # The first child div holds the event name link
         first_div = super_elem.css_first("div")
         if first_div:
             anchor = first_div.css_first("a")
@@ -54,7 +43,6 @@ def _parse_event_info(html: HTMLParser) -> dict:
         if series_elem:
             event_series = extract_text_content(series_elem)
 
-    # Event logo lives in .match-header-event img
     logo_elem = html.css_first(".match-header-event img")
     if logo_elem:
         src = logo_elem.attributes.get("src", "")
@@ -112,7 +100,6 @@ def _parse_teams(html: HTMLParser) -> list[dict]:
         name = ""
         tag = ""
         if name_elem:
-            # The full name block contains name + tag on separate lines
             full_text = name_elem.text()
             lines = [ln.strip() for ln in full_text.splitlines() if ln.strip()]
             if lines:
@@ -132,7 +119,6 @@ def _parse_teams(html: HTMLParser) -> list[dict]:
         )
         id_mapper.register_team(name, team_id)
 
-    # Logos: two <img> elements inside .match-header-vs
     vs_elem = html.css_first(".match-header-vs")
     if vs_elem:
         logos = vs_elem.css("img")
@@ -141,13 +127,9 @@ def _parse_teams(html: HTMLParser) -> list[dict]:
             if src:
                 teams[idx]["logo"] = normalize_image_url(src)
 
-    # Scores
     score_elems = html.css(".match-header-vs-score span")
     winner_idx = -1
 
-    # Determine which team index is the winner based on score positioning.
-    # VLR renders winner/loser spans in DOM order: left team first, right team second.
-    # Collect all score spans in order to figure out which side won.
     scored_spans = [
         (span.attributes.get("class") or "", span.text(strip=True))
         for span in score_elems
@@ -196,31 +178,141 @@ def _parse_streams_vods(html: HTMLParser) -> tuple[list[dict], list[dict]]:
 # Per-map game data parsers
 # ---------------------------------------------------------------------------
 
-def _parse_player_row(cells: list) -> dict:
-    """
-    Parse a single player table row into a stat dict.
+def _parse_player_row_div(player_cell, stat_cells: list) -> dict:
+    """Parse a single player from the new ovw-cell div-based layout.
 
-    Actual VLR column layout (14 cells):
-      [0]  mod-player   — player name
-      [1]  mod-agents   — agent icon (img title)
-      [2]  mod-stat     — rating
-      [3]  mod-stat     — ACS
-      [4]  mod-vlr-kills — kills
-      [5]  mod-vlr-deaths — deaths
-      [6]  mod-vlr-assists — assists
-      [7]  mod-kd-diff  — K/D +/-
-      [8]  mod-stat     — KAST
-      [9]  mod-stat     — ADR
-      [10] mod-stat     — HS%
-      [11] mod-fb       — first kills
-      [12] mod-fd       — first deaths
-      [13] mod-fk-diff  — FK +/-
+    Each player occupies 11 consecutive ``.ovw-cell`` divs: a ``mod-player``
+    cell with name / agent, followed by 10 stat cells keyed by ``data-col``
+    (rating2, acs, kills, kd-diff, kast, adr, hsp, fb, fd, fk-diff).
 
-    Values are in .side.mod-both spans or direct text.
+    The ``data-col="kills"`` cell is special: it uses ``.mod-kda`` and
+    contains kills / deaths / assists inside ``.ovw-kda-stat`` sub-elements.
     """
+    player_name = ""
+    agent = ""
+
+    name_elem = player_cell.css_first(".ovw-player-name")
+    if name_elem:
+        player_name = extract_text_content(name_elem)
+
+    agents = player_cell.css_first(".ovw-agents")
+    if agents:
+        img = agents.css_first("img")
+        if img:
+            agent = img.attributes.get("title", "") or img.attributes.get("alt", "")
+
+    stats: dict[str, str] = {}
+    kills = deaths = assists = ""
+    for cell in stat_cells:
+        cls = cell.attributes.get("class", "") or ""
+        if "mod-kda" in cls:
+            kda_stats = cell.css(".ovw-kda-stat")
+            for ks in kda_stats:
+                kdc = ks.attributes.get("data-col", "")
+                both = ks.css_first(".side.mod-both")
+                val = both.text(strip=True) if both else ""
+                if kdc == "kills":
+                    kills = val
+                elif kdc == "deaths":
+                    deaths = val
+                elif kdc == "assists":
+                    assists = val
+            continue
+
+        data_col = cell.attributes.get("data-col", "")
+        if not data_col:
+            continue
+        both = cell.css_first(".side.mod-both")
+        if both:
+            stats[data_col] = both.text(strip=True)
+        else:
+            stats[data_col] = cell.text(strip=True)
+
+    return {
+        "name": player_name,
+        "agent": agent,
+        "rating": stats.get("rating2", ""),
+        "acs": stats.get("acs", ""),
+        "kills": kills or stats.get("kills", ""),
+        "deaths": deaths,
+        "assists": assists,
+        "kd_diff": stats.get("kd-diff", ""),
+        "kast": stats.get("kast", ""),
+        "adr": stats.get("adr", ""),
+        "hs_pct": stats.get("hsp", ""),
+        "fk": stats.get("fb", ""),
+        "fd": stats.get("fd", ""),
+        "fk_diff": stats.get("fk-diff", ""),
+    }
+
+
+def _parse_map_players(game_elem) -> dict:
+    """Parse per-team player stats from the ovw-cell div-based layout.
+
+    VLR now renders player stats as a flat sequence of ``.ovw-cell`` divs.
+    Each player uses 11 cells: ``.ovw-cell.mod-player`` (name + agent)
+    followed by 10 stat cells. The first 5 players are team 1, the next 5
+    are team 2. Falls back to the old ``table.wf-table-inset.mod-overview``
+    format when present.
+    """
+    team1_players: list[dict] = []
+    team2_players: list[dict] = []
+
+    all_cells = game_elem.css(".ovw-cell")
+    player_cells = [c for c in all_cells if "mod-player" in (c.attributes.get("class", "") or "")]
+    non_player_cells = [c for c in all_cells if "mod-player" not in (c.attributes.get("class", "") or "")]
+
+    player_count = len(player_cells)
+    stats_per_player = len(non_player_cells) // max(player_count, 1)
+
+    def parse_players_from_range(start: int, count: int) -> list[dict]:
+        players = []
+        for i in range(count):
+            pi = start + i
+            if pi >= player_count:
+                break
+            stat_start = (start + i) * stats_per_player
+            stat_group = non_player_cells[stat_start:stat_start + stats_per_player]
+            try:
+                players.append(_parse_player_row_div(player_cells[pi], stat_group))
+            except Exception as exc:
+                logger.debug("Skipping player row due to parse error: %s", exc)
+        return players
+
+    if player_count >= 2:
+        half = player_count // 2
+        team1_players = parse_players_from_range(0, half)
+        team2_players = parse_players_from_range(half, player_count - half)
+
+    if not team1_players and not team2_players:
+        tables = game_elem.css("table.wf-table-inset.mod-overview")
+
+        def parse_table_rows(table) -> list[dict]:
+            players = []
+            for row in table.css("tbody tr"):
+                cells = row.css("td")
+                if not cells or len(cells) < 5:
+                    continue
+                try:
+                    p = _parse_player_row_table(cells)
+                    if p["name"]:
+                        players.append(p)
+                except Exception as exc:
+                    logger.debug("Skipping player row: %s", exc)
+            return players
+
+        if len(tables) >= 1:
+            team1_players = parse_table_rows(tables[0])
+        if len(tables) >= 2:
+            team2_players = parse_table_rows(tables[1])
+
+    return {"team1": team1_players, "team2": team2_players}
+
+
+def _parse_player_row_table(cells: list) -> dict:
+    """Legacy parser for old table-based player stats (14 <td> cells)."""
 
     def cell_val(cell) -> str:
-        """Extract the .side.mod-both span value, falling back to raw text."""
         if not cell:
             return ""
         both = cell.css_first(".side.mod-both")
@@ -231,7 +323,6 @@ def _parse_player_row(cells: list) -> dict:
     def safe_val(idx: int) -> str:
         return cell_val(cells[idx]) if idx < len(cells) else ""
 
-    # Player name — [0] mod-player
     player_name = ""
     if cells:
         player_cell = cells[0]
@@ -241,7 +332,6 @@ def _parse_player_row(cells: list) -> dict:
         else:
             player_name = player_cell.text(strip=True)
 
-    # Agent — [1] mod-agents, icon title
     agent = ""
     if len(cells) > 1:
         img = cells[1].css_first("img")
@@ -266,51 +356,12 @@ def _parse_player_row(cells: list) -> dict:
     }
 
 
-def _parse_map_players(game_elem) -> dict:
-    """
-    Parse player stat tables inside a single .vm-stats-game element.
-
-    VLR.GG renders two back-to-back <table> blocks inside
-    .vm-stats-container — one per team. We treat each table
-    as one team's roster.
-    """
-    team1_players: list[dict] = []
-    team2_players: list[dict] = []
-
-    tables = game_elem.css("table.wf-table-inset.mod-overview")
-
-    def parse_table_rows(table) -> list[dict]:
-        players = []
-        for row in table.css("tbody tr"):
-            cells = row.css("td")
-            if not cells:
-                continue
-            # Skip separator rows: they typically contain very few cells
-            if len(cells) < 5:
-                continue
-            try:
-                players.append(_parse_player_row(cells))
-            except Exception as exc:
-                logger.debug("Skipping player row due to parse error: %s", exc)
-        return players
-
-    if len(tables) >= 1:
-        team1_players = parse_table_rows(tables[0])
-    if len(tables) >= 2:
-        team2_players = parse_table_rows(tables[1])
-
-    return {"team1": team1_players, "team2": team2_players}
-
-
 def _parse_map_scores(game_elem) -> dict:
     """
     Extract team scores and CT/T/OT splits from a single game header.
 
-    The header has `.team` blocks each containing:
-    - `.score` for the total round score
-    - `.mod-ct` for CT-side rounds
-    - `.mod-t` for T-side rounds
-    - `.mod-ot` for overtime rounds (optional)
+    Updated for new VLR layout where the first team has the score on the
+    left (before the map column) and the second team on the right.
     """
     result = {
         "score": {"team1": "", "team2": ""},
@@ -337,17 +388,40 @@ def _parse_map_scores(game_elem) -> dict:
             except (ValueError, TypeError):
                 result["score"][key] = val
 
-        ct_el = block.css_first(".mod-ct")
-        if ct_el:
-            result["score_ct"][key] = ct_el.text(strip=True)
+        ct_els = block.css(".mod-ct")
+        ct_val = ""
+        for ct in ct_els:
+            txt = ct.text(strip=True)
+            if txt and ct.tag != "span":
+                ct_val = txt
+        if not ct_val:
+            for ct in ct_els:
+                if ct.tag == "span":
+                    ct_val = ct.text(strip=True)
+                    break
+        result["score_ct"][key] = ct_val
 
-        t_el = block.css_first(".mod-t")
-        if t_el:
-            result["score_t"][key] = t_el.text(strip=True)
+        t_els = block.css(".mod-t")
+        t_val = ""
+        for t in t_els:
+            txt = t.text(strip=True)
+            if txt and t.tag != "span":
+                t_val = txt
+        if not t_val:
+            for t in t_els:
+                if t.tag == "span":
+                    t_val = t.text(strip=True)
+                    break
+        result["score_t"][key] = t_val
 
-        ot_el = block.css_first(".mod-ot")
-        if ot_el:
-            result["score_ot"][key] = ot_el.text(strip=True)
+        ot_els = block.css(".mod-ot")
+        ot_val = ""
+        for ot in ot_els:
+            txt = ot.text(strip=True)
+            if txt:
+                ot_val = txt
+                break
+        result["score_ot"][key] = ot_val
 
     return result
 
@@ -355,14 +429,6 @@ def _parse_map_scores(game_elem) -> dict:
 def _parse_rounds(game_elem) -> list[dict]:
     """
     Parse round-by-round outcomes from a .vlr-rounds container.
-
-    Structure: each .vlr-rounds-row contains .vlr-rounds-row-col elements,
-    one per round. Each column has two .rnd-sq spans — [0] = team1, [1] = team2.
-    The span with `mod-win` indicates the winner. The side (mod-ct / mod-t)
-    tells which side that team was on.
-
-    There are two rows: row 0 covers the first half (+ overtime),
-    row 1 covers the second half.
     """
     rounds: list[dict] = []
     rounds_container = game_elem.css_first(".vlr-rounds")
@@ -382,7 +448,6 @@ def _parse_rounds(game_elem) -> list[dict]:
 
             round_num += 1
 
-            # Determine winner from whichever sq has mod-win
             winner = ""
             winning_side = ""
             for idx, sq in enumerate(sqs):
@@ -413,28 +478,20 @@ def _parse_maps(html: HTMLParser) -> list[dict]:
         if game_id == "all":
             continue
 
-        # Map name — the .map container has child spans for pick info and
-        # duration that we need to exclude. Extract just the first text node.
         map_name = ""
         picked_by = ""
         map_container = game_elem.css_first(".vm-stats-game-header .map")
         if map_container:
-            # Get the map name from the span that contains only the name,
-            # excluding .picked and .map-duration children
-            pick_elem = map_container.css_first(".picked") or map_container.css_first(".pick")
-            dur_elem = map_container.css_first(".map-duration")
-            if pick_elem:
-                picked_by = pick_elem.text(strip=True)
-            # Remove child text to isolate map name
-            full_text = map_container.text(strip=True)
-            subtract = ""
-            if pick_elem:
-                subtract += pick_elem.text(strip=True)
-            if dur_elem:
-                subtract += dur_elem.text(strip=True)
-            map_name = re.sub(r"\s+", " ", full_text.replace(subtract, "")).strip()
+            spans = map_container.css("span")
+            for span in spans:
+                txt = span.text(strip=True)
+                if txt and txt.lower() not in ("",) and not txt.lower().startswith("pick"):
+                    map_name = txt
+                    break
+            if not map_name:
+                map_name = map_container.text(strip=True).split("\n")[0].strip()
+                map_name = re.sub(r"\s*\d{1,2}:\d{2}(?::\d{2})?\s*$", "", map_name).strip()
 
-        # Duration
         duration = ""
         dur_elem = game_elem.css_first(".map-duration")
         if dur_elem:
@@ -464,80 +521,82 @@ def _parse_maps(html: HTMLParser) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def _parse_head_to_head(html: HTMLParser) -> list[dict]:
-    """Parse head-to-head match history entries."""
+    """Parse head-to-head match history from the new VLR layout.
+
+    VLR now renders past encounters as ``.match-histories-item`` anchors
+    directly in the page, not nested inside ``.match-h2h-matches``. Results
+    carry ``.match-histories-item-result`` with ``mod-win`` / ``mod-loss``
+    and ``.rf`` / ``.ra`` score spans.
+    Falls back to the old ``.match-h2h-matches .wf-module-item`` format.
+    """
     h2h: list[dict] = []
 
-    container = html.css_first(".match-h2h-matches")
-    if not container:
-        return h2h
+    items = html.css(".match-histories-item")
+    if not items:
+        container = html.css_first(".match-h2h-matches")
+        if container:
+            items = container.css(".wf-module-item")
 
-    for row in container.css(".wf-module-item"):
-        # Team entries: each has mod-win for the winning side
-        team_elems = row.css(".match-h2h-matches-team")
-        teams = []
-        for te in team_elems:
-            cls = te.attributes.get("class", "")
+    for row in items:
+        result_elem = row.css_first(".match-histories-item-result")
+        if result_elem:
+            cls = result_elem.attributes.get("class", "") or ""
             is_winner = "mod-win" in cls
-            teams.append({"name": extract_text_content(te), "is_winner": is_winner})
+            score_rf = extract_text_content(result_elem.css_first(".rf"))
+            score_ra = extract_text_content(result_elem.css_first(".ra"))
+            score = f"{score_rf} - {score_ra}"
 
-        score_elem = row.css_first(".match-h2h-matches-score")
-        score = extract_text_content(score_elem) if score_elem else ""
+            opp_elem = row.css_first(".match-histories-item-opponent-name")
+            opponent = extract_text_content(opp_elem) if opp_elem else ""
 
-        event_elem = row.css_first(".match-h2h-matches-event-name")
-        event = extract_text_content(event_elem) if event_elem else ""
+            date_elem = row.css_first(".match-histories-item-date")
+            date = extract_text_content(date_elem) if date_elem else ""
 
-        date_elem = row.css_first(".match-h2h-matches-date")
-        date = extract_text_content(date_elem) if date_elem else ""
+            href = row.attributes.get("href", "")
+            url = build_full_url(href)
 
-        href = row.attributes.get("href", "")
-        url = build_full_url(href)
+            teams = [
+                {"name": "", "is_winner": is_winner},
+                {"name": opponent, "is_winner": not is_winner},
+            ]
 
-        h2h.append({
-            "event": event,
-            "date": date,
-            "teams": teams,
-            "score": score,
-            "url": url,
-        })
+            h2h.append({
+                "event": "",
+                "date": date,
+                "teams": teams,
+                "score": score,
+                "url": url,
+            })
+        else:
+            # Old format: .match-h2h-matches rows
+            team_elems = row.css(".match-h2h-matches-team")
+            teams = []
+            for te in team_elems:
+                cls = te.attributes.get("class", "")
+                is_winner = "mod-win" in cls
+                teams.append({"name": extract_text_content(te), "is_winner": is_winner})
+
+            score_elem = row.css_first(".match-h2h-matches-score")
+            score = extract_text_content(score_elem) if score_elem else ""
+
+            event_elem = row.css_first(".match-h2h-matches-event-name")
+            event = extract_text_content(event_elem) if event_elem else ""
+
+            date_elem = row.css_first(".match-h2h-matches-date")
+            date = extract_text_content(date_elem) if date_elem else ""
+
+            href = row.attributes.get("href", "")
+            url = build_full_url(href)
+
+            h2h.append({
+                "event": event,
+                "date": date,
+                "teams": teams,
+                "score": score,
+                "url": url,
+            })
 
     return h2h
-
-
-# ---------------------------------------------------------------------------
-# Game ID extraction
-# ---------------------------------------------------------------------------
-
-def _extract_game_ids(html: HTMLParser) -> list[str]:
-    """Return all data-game-id values from the stats nav, excluding 'all'."""
-    game_ids: list[str] = []
-    for item in html.css(".vm-stats-gamesnav-item"):
-        gid = item.attributes.get("data-game-id", "")
-        if gid and gid != "all":
-            game_ids.append(gid)
-    return game_ids
-
-
-async def _fetch_game_tab_html(
-    client,
-    base_url: str,
-    game_id: str,
-    tab: str,
-    timeout: int = MATCH_DETAIL_TAB_FETCH_TIMEOUT,
-) -> tuple[str, str, HTMLParser | None]:
-    """Fetch one game-tab page and return parsed HTML when available."""
-    url = f"{base_url}/?game={game_id}&tab={tab}"
-    try:
-        resp = await fetch_with_retries(url, client=client, timeout=timeout)
-        if resp.status_code >= 400:
-            logger.warning(
-                "Failed to fetch %s tab for game %s: upstream status %d",
-                tab, game_id, resp.status_code,
-            )
-            return game_id, tab, None
-        return game_id, tab, parse_html(resp.text)
-    except Exception as exc:
-        logger.warning("Failed to fetch %s tab for game %s: %s", tab, game_id, exc)
-        return game_id, tab, None
 
 
 # ---------------------------------------------------------------------------
@@ -547,9 +606,6 @@ async def _fetch_game_tab_html(
 def _parse_kill_matrix(html: HTMLParser) -> list[dict]:
     """
     Parse the kill matrix table from the performance tab.
-
-    Each row represents a player; each cell is the kill count versus
-    a specific opponent.
     """
     matrix: list[dict] = []
 
@@ -557,7 +613,6 @@ def _parse_kill_matrix(html: HTMLParser) -> list[dict]:
     if not table:
         return matrix
 
-    # Header row holds opponent names
     header_row = table.css_first("thead tr")
     opponents: list[str] = []
     if header_row:
@@ -594,7 +649,6 @@ def _parse_advanced_stats(html: HTMLParser) -> list[dict]:
     if not table:
         return advanced
 
-    # Derive header labels
     header_row = table.css_first("thead tr")
     headers: list[str] = []
     if header_row:
@@ -653,156 +707,3 @@ def _parse_economy(html: HTMLParser) -> list[dict]:
         economy.append(row_dict)
 
     return economy
-
-
-# ---------------------------------------------------------------------------
-# Main scraper
-# ---------------------------------------------------------------------------
-
-@handle_scraper_errors
-async def vlr_match_detail(match_id: str) -> dict:
-    """
-    Scrape a single VLR.GG match page and return structured match data.
-
-    Fetches the base page, then concurrently fetches the performance and
-    economy tabs for the first game. Cache TTL is 30 s for live matches
-    and 300 s for completed matches.
-
-    Args:
-        match_id: Numeric VLR.GG match ID (e.g. "123456").
-
-    Returns:
-        Standard response dict with shape::
-
-            {
-                "data": {
-                    "status": 200,
-                    "segments": [{ ... match fields ... }]
-                }
-            }
-    """
-    base_url = f"{VLR_BASE_URL}/{match_id}"
-
-    # Determine cache TTL after we know if the match is live.
-    # We first check the live-TTL cache, then the completed-TTL cache.
-    cached = cache_manager.get(CACHE_TTL_MATCH_DETAIL_LIVE, "match_detail", match_id)
-    if cached is not None:
-        return cached
-    cached = cache_manager.get(CACHE_TTL_MATCH_DETAIL, "match_detail", match_id)
-    if cached is not None:
-        return cached
-
-    async def build():
-        cached_live = cache_manager.get(
-            CACHE_TTL_MATCH_DETAIL_LIVE, "match_detail", match_id
-        )
-        if cached_live is not None:
-            return cached_live
-
-        cached_complete = cache_manager.get(
-            CACHE_TTL_MATCH_DETAIL, "match_detail", match_id
-        )
-        if cached_complete is not None:
-            return cached_complete
-
-        client = get_http_client()
-
-        base_resp = await fetch_with_retries(base_url, client=client)
-        http_status = base_resp.status_code
-        if http_status >= 400:
-            return upstream_error_payload(http_status, f"match detail {match_id}")
-
-        base_html = parse_html(base_resp.text)
-
-        game_ids = _extract_game_ids(base_html)
-        first_game_id = game_ids[0] if game_ids else None
-
-        performance_by_game: dict[str, dict] = {}
-        economy_by_game: dict[str, list[dict]] = {}
-
-        if game_ids:
-            tab_fetch_semaphore = asyncio.Semaphore(MATCH_DETAIL_TAB_FETCH_CONCURRENCY)
-
-            async def fetch_tab(game_id: str, tab: str):
-                async with tab_fetch_semaphore:
-                    return await _fetch_game_tab_html(
-                        client,
-                        base_url,
-                        game_id,
-                        tab,
-                        timeout=MATCH_DETAIL_TAB_FETCH_TIMEOUT,
-                    )
-
-            tab_results = await asyncio.gather(
-                *[
-                    fetch_tab(game_id, tab)
-                    for game_id in game_ids
-                    for tab in ("performance", "economy")
-                ]
-            )
-
-            for game_id, tab, tab_html in tab_results:
-                if tab_html is None:
-                    continue
-                if tab == "performance":
-                    performance_by_game[game_id] = {
-                        "kill_matrix": _parse_kill_matrix(tab_html),
-                        "advanced_stats": _parse_advanced_stats(tab_html),
-                    }
-                elif tab == "economy":
-                    economy_by_game[game_id] = _parse_economy(tab_html)
-
-        event_info = _parse_event_info(base_html)
-        header_info = _parse_match_header(base_html)
-        teams = _parse_teams(base_html)
-        streams, vods = _parse_streams_vods(base_html)
-        maps = _parse_maps(base_html)
-        h2h = _parse_head_to_head(base_html)
-
-        for index, map_data in enumerate(maps):
-            game_id = game_ids[index] if index < len(game_ids) else ""
-            map_data["performance"] = performance_by_game.get(
-                game_id, {"kill_matrix": [], "advanced_stats": []}
-            )
-            map_data["economy"] = economy_by_game.get(game_id, [])
-
-        first_game_performance = performance_by_game.get(
-            first_game_id or "", {"kill_matrix": [], "advanced_stats": []}
-        )
-        first_game_economy = economy_by_game.get(first_game_id or "", [])
-
-        segment = {
-            "match_id": match_id,
-            "event": event_info,
-            "date": header_info["date"],
-            "map_vetos": header_info["map_vetos"],
-            "status": header_info["status"],
-            "teams": teams,
-            "streams": streams,
-            "vods": vods,
-            "maps": maps,
-            "head_to_head": h2h,
-            "performance": {
-                "kill_matrix": first_game_performance["kill_matrix"],
-                "advanced_stats": first_game_performance["advanced_stats"],
-                "by_map": [
-                    {"game_id": game_id, **performance_by_game.get(game_id, {"kill_matrix": [], "advanced_stats": []})}
-                    for game_id in game_ids
-                ],
-            },
-            "economy": first_game_economy,
-            "economy_by_map": [
-                {"game_id": game_id, "rows": economy_by_game.get(game_id, [])}
-                for game_id in game_ids
-            ],
-        }
-
-        data = {"data": {"status": http_status, "segments": [segment]}}
-
-        live = _is_live(base_html)
-        ttl = CACHE_TTL_MATCH_DETAIL_LIVE if live else CACHE_TTL_MATCH_DETAIL
-        cache_manager.set_if_cacheable(ttl, data, "match_detail", match_id)
-
-        return data
-
-    return await cache_manager.coalesce_async(f"match_detail:{match_id}", build)

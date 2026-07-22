@@ -355,7 +355,8 @@ def _parse_results_page(html: HTMLParser, page: int) -> list[dict]:
 
     for item in items:
         try:
-            url_path = item.attributes["href"]
+            href = item.attributes["href"]
+            url_path = build_full_url(href)
             eta = item.css_first("div.ml-eta").text() + " ago"
             rounds = (
                 item.css_first("div.match-item-event-series")

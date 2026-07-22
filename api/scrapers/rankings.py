@@ -112,7 +112,8 @@ async def vlr_rankings(region_key):
 
         result = []
         for item in html.css("div.rank-item"):
-            rank = _normalize_text(item.css_first("div.rank-item-rank-num").text())
+            rank_elem = item.css_first("div.rank-item-rank-num")
+            rank = _normalize_text(rank_elem.text()) if rank_elem else ""
             team = _extract_ranked_team_name(item)
             team_link = item.css_first("a.rank-item-team")
             team_logo = team_link.css_first("img") if team_link else None
@@ -120,18 +121,31 @@ async def vlr_rankings(region_key):
             logo = re.sub(r"/img/vlr/tmp/vlr.png", "", logo)
             country = _normalize_text(item.css_first("div.rank-item-team-country").text())
             last_played, last_played_team, last_played_team_logo = _extract_last_played_summary(item)
-            record = _normalize_text(item.css_first("div.rank-item-record").text())
+
+            record_elems = item.css("div.rank-item-record")
+            record = _normalize_text(record_elems[0].text()) if record_elems else ""
+            recent_record = _normalize_text(record_elems[1].text()) if len(record_elems) > 1 else ""
+
             earnings = _normalize_text(item.css_first("div.rank-item-earnings").text())
+
+            rating_elem = item.css_first("div.rank-item-rating")
+            rating = _normalize_text(rating_elem.text()) if rating_elem else ""
+
+            streak_elem = item.css_first("div.rank-item-streak")
+            streak = _normalize_text(streak_elem.text()) if streak_elem else ""
 
             result.append(
                 {
                     "rank": rank,
                     "team": team,
                     "country": country,
+                    "rating": rating,
+                    "streak": streak,
                     "last_played": last_played,
                     "last_played_team": last_played_team,
                     "last_played_team_logo": last_played_team_logo,
                     "record": record,
+                    "recent_record": recent_record,
                     "earnings": earnings,
                     "logo": logo,
                 }

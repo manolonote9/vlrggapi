@@ -59,16 +59,12 @@ async def v2_news():
     return _wrap_v2(result)
 
 
-@router.get("/stats", response_model=V2Response, summary="Player stats", description="Get player statistics for a region, timespan, and optional event.")
+@router.get("/stats", response_model=V2Response, summary="Player stats", description="Get player statistics for a region and timespan.")
 async def v2_stats(
-    region: str = Query(..., description="Region shortname (na, eu, ap, la, la-s, la-n, oce, kr, mn, gc, br, cn, jp, col)"),
+    region: str = Query(..., description="Region: all, americas, emea, pacific, china, intl (deprecated aliases: na/br -> americas, eu -> emea, ap/kr/jp/oce -> pacific, cn -> china)"),
     timespan: str = Query(..., description="Timespan: 30, 60, 90, or all"),
-    event_id: str = Query(None, description="Optional event ID to filter stats by event"),
 ):
-    if event_id is not None and not event_id.isdigit():
-        from fastapi import HTTPException
-        raise HTTPException(status_code=400, detail="event_id must be a numeric ID")
-    result = await get_stats_data(region, timespan, event_id)
+    result = await get_stats_data(region, timespan)
     return _wrap_v2(result)
 
 
