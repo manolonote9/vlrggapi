@@ -364,7 +364,7 @@ GET /v2/player?id=9&q=matches&page=1
     "info": { "name": "TenZ", "real_name": "Tyson Ngo", "avatar": "https://owcdn.net/img/...", "country": "Canada", "socials": [{ "platform": "twitter", "url": "..." }] },
     "current_teams": [{ "name": "Sentinels", "tag": "SEN", "status": "Active" }],
     "past_teams": [{ "name": "Cloud9", "tag": "C9", "dates": "2020–2021" }],
-    "agent_stats": [{ "agent": "Jett", "use_count": 150, "use_pct": "42%", "rounds": 3200, "rating": "1.15", "acs": "245.3", "kd": "1.18", "adr": "162.1", "kast": "71%", "kpr": "0.82", "apr": "0.28", "fkpr": "0.20", "fdpr": "0.14", "kills": 2624, "deaths": 2224, "assists": 896, "fk": 640, "fd": 448 }],
+    "agent_stats": [{ "agent": "Jett", "usage_count": "150", "usage_pct": "42%", "rounds": "3200", "rating": "1.15", "acs": "245.3", "kd": "1.18", "adr": "162.1", "kast": "71%", "kpr": "0.82", "apr": "0.28", "fk_fd": "0.34", "kills": "2624", "deaths": "2224", "assists": "896", "fk": "640", "fd": "448" }],
     "event_placements": [{ "event": "Champions 2024", "placement": "1st", "prize": "$100,000", "team": "Sentinels" }],
     "total_winnings": "$177,650"
   }
