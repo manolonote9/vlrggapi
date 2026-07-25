@@ -17,6 +17,9 @@ from utils.constants import (
     DEFAULT_RETRIES,
     DEFAULT_TIMEOUT,
     MIN_RESPONSE_SIZE,
+    UPSTREAM_RATE_LIMIT,
+    UPSTREAM_RATE_WINDOW,
+    VLR_BASE_URL,
 )
 from utils.utils import headers
 
@@ -85,6 +88,43 @@ class CircuitBreaker:
 
 
 circuit_breaker = CircuitBreaker()
+
+
+class UpstreamRateLimiter:
+    """Sliding-window rate limiter for requests to VLR.GG.
+
+    Ensures we never exceed UPSTREAM_RATE_LIMIT requests per
+    UPSTREAM_RATE_WINDOW seconds to avoid triggering IP blocks.
+    """
+
+    def __init__(self, limit: int = UPSTREAM_RATE_LIMIT, window: float = UPSTREAM_RATE_WINDOW):
+        self.limit = limit
+        self.window = window
+        self._timestamps: list[float] = []
+        self._lock = asyncio.Lock()
+
+    async def wait_if_needed(self) -> None:
+        """Block until a request slot is available in the sliding window."""
+        async with self._lock:
+            now = time.time()
+            cutoff = now - self.window
+            self._timestamps = [t for t in self._timestamps if t > cutoff]
+
+            if len(self._timestamps) >= self.limit:
+                sleep_for = self._timestamps[0] - cutoff
+                logger.warning(
+                    "Upstream rate limit reached (%d/%d). Waiting %.1fs",
+                    len(self._timestamps), self.limit, sleep_for,
+                )
+                await asyncio.sleep(sleep_for)
+                now = time.time()
+                cutoff = now - self.window
+                self._timestamps = [t for t in self._timestamps if t > cutoff]
+
+            self._timestamps.append(now)
+
+
+upstream_rate_limiter = UpstreamRateLimiter()
 
 _etags: dict[str, str] = {}
 
@@ -159,6 +199,9 @@ async def fetch_with_retries(
         raise CircuitOpenError(
             f"Circuit open for {urlparse(url).netloc} — request to {url} blocked"
         )
+
+    if url.startswith(VLR_BASE_URL):
+        await upstream_rate_limiter.wait_if_needed()
 
     client = client or get_http_client()
     retries = max(1, max_retries)
