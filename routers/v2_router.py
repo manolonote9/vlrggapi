@@ -59,12 +59,13 @@ async def v2_news():
     return _wrap_v2(result)
 
 
-@router.get("/stats", response_model=V2Response, summary="Player stats", description="Get player statistics for a region and timespan.")
+@router.get("/stats", response_model=V2Response, summary="Player stats", description="Get player statistics for a region, timespan and event.")
 async def v2_stats(
     region: str = Query(..., description="Region: all, americas, emea, pacific, china, intl (deprecated aliases: na/br -> americas, eu -> emea, ap/kr/jp/oce -> pacific, cn -> china)"),
     timespan: str = Query(..., description="Timespan: 30, 60, 90, or all"),
+    event_id: str = Query("all", description="VLR.GG event ID to filter by, or 'all'."),
 ):
-    result = await get_stats_data(region, timespan)
+    result = await get_stats_data(region, timespan, event_id)
     return _wrap_v2(result)
 
 
