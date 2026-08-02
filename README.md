@@ -788,7 +788,7 @@ Original endpoints are not cached.
 
 ### Requirements
 
-- Python `3.11` (matches `.python-version`, CI, and the Docker image)
+- Python `3.12` (matches `.python-version`, CI, and the Docker image)
 - `pip`
 
 ```bash
