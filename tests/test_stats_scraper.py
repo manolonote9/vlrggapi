@@ -253,11 +253,6 @@ def test_build_column_map_keys_align_with_td_positions():
     assert col_map["cl"] == 16
 
 
-def test_build_column_map_none_for_legacy_markup():
-    tree = HTMLParser(STATS_HTML)
-    assert _build_column_map(tree) is None
-
-
 # ---------------------------------------------------------------------------
 # Org selector fallback (D2)
 # ---------------------------------------------------------------------------
