@@ -269,6 +269,28 @@ async def test_vlr_match_detail_limits_tab_fetches_and_falls_back_on_tab_error(m
 
 
 @pytest.mark.anyio
+async def test_vlr_match_detail_light_skips_tabs_but_keeps_lineups(monkeypatch):
+    cache_manager.clear_all()
+    client = FakeAsyncClient(
+        {
+            "https://www.vlr.gg/999": [FakeResponse(200, BASE_MATCH_HTML)],
+        }
+    )
+
+    monkeypatch.setattr("api.scrapers.match_detail.crawler.get_http_client", lambda: client)
+
+    data = await vlr_match_detail("999", light=True)
+    segment = data["data"]["segments"][0]
+
+    assert len(client.calls) == 1
+    assert segment["performance"]["kill_matrix"] == []
+    assert segment["performance"]["advanced_stats"] == []
+    assert segment["economy"] == []
+    assert segment["maps"][0]["players"]["team1"][0]["name"] == "TenZ"
+    cache_manager.clear_all()
+
+
+@pytest.mark.anyio
 async def test_vlr_match_detail_uses_empty_team_id_when_header_link_is_missing(monkeypatch):
     cache_manager.clear_all()
     client = FakeAsyncClient(
