@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from api.scrapers.teams import (
     vlr_team,
     vlr_team_matches,
+    vlr_team_stats,
     vlr_team_transactions,
 )
 from api.scrapers.teams.parsers import _extract_prize_from_text
@@ -40,6 +41,28 @@ class FakeAsyncClient:
 )
 def test_extract_prize_from_text_handles_concatenated_years(text, expected):
     assert _extract_prize_from_text(text) == expected
+
+
+@pytest.mark.anyio
+async def test_vlr_team_stats_appends_date_start_to_url(monkeypatch):
+    body = (
+        '<html><body><table class="wf-table mod-team-maps"><tbody>'
+        '<tr><td>Haven (1)</td><td>100%</td><td>50%</td><td>1</td><td>0</td>'
+        '<td>0</td><td>0</td><td>0%</td><td>0</td><td>0</td><td>0%</td><td>0</td><td>0</td></tr>'
+        "</tbody></table></body></html>"
+    )
+    client = FakeAsyncClient(FakeResponse(200, body))
+
+    monkeypatch.setattr("api.scrapers.teams.crawlers.get_http_client", lambda: client)
+
+    await vlr_team_stats("77")
+    await vlr_team_stats("77", date_start="2026-05-03")
+
+    urls = [call[0] for call in client.calls]
+    assert urls == [
+        "https://www.vlr.gg/team/stats/77/",
+        "https://www.vlr.gg/team/stats/77/?date_start=2026-05-03",
+    ]
 
 
 @pytest.mark.anyio

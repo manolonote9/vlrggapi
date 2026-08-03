@@ -195,6 +195,17 @@ def validate_id_param(value: str, name: str = "id"):
         )
 
 
+def validate_date_param(value: str, name: str = "date_start"):
+    """Validate a YYYY-MM-DD date string. Raises 400 on invalid."""
+    import re
+
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {name} '{value}'. Must be YYYY-MM-DD.",
+        )
+
+
 def validate_match_workload(
     num_pages: int,
     from_page: int | None,

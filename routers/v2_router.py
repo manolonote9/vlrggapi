@@ -27,6 +27,7 @@ from routers.shared_handlers import (
 from utils.constants import MAX_MATCH_QUERY_BOUND
 from utils.error_handling import (
     validate_event_query,
+    validate_date_param,
     validate_id_param,
     validate_match_query,
     validate_match_workload,
@@ -145,16 +146,19 @@ async def v2_team(
     id: str = Query(..., description="VLR.GG team ID"),
     q: str = Query("profile", description="Data type: profile, matches, transactions, stats, history, upcoming"),
     page: int = Query(1, description="Page number for matches (1-based)", ge=1, le=100),
+    date_start: str = Query("", description="Start date (YYYY-MM-DD) to restrict stats to matches from that day on. Only used with q=stats."),
 ):
     validate_id_param(id)
     validate_team_query(q)
+    if date_start:
+        validate_date_param(date_start)
 
     if q == "matches":
         result = await get_team_matches_data(id, page)
     elif q == "transactions":
         result = await get_team_transactions_data(id)
     elif q == "stats":
-        result = await get_team_stats_data(id)
+        result = await get_team_stats_data(id, date_start)
     elif q == "history":
         result = await get_team_history_data(id)
     elif q == "upcoming":
