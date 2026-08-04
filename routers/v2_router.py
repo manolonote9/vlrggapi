@@ -26,8 +26,8 @@ from routers.shared_handlers import (
 )
 from utils.constants import MAX_MATCH_QUERY_BOUND
 from utils.error_handling import (
-    validate_event_query,
     validate_date_param,
+    validate_event_query,
     validate_id_param,
     validate_match_query,
     validate_match_workload,
