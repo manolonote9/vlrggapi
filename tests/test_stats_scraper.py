@@ -330,6 +330,10 @@ async def test_vlr_stats_filters_by_event_id(monkeypatch):
     data_call = next(c for c in fetch.calls if "/event/stats/2952" in c)
     assert "event/stats/2952" in data_call
     assert "event_id=2952" not in data_call
+    # No rounds floor on the event-scoped page: a player eliminated in groups
+    # (few rounds) must still show up.
+    assert "min_rounds=0" in data_call
+    assert "min_rating=0" in data_call
 
 
 @pytest.mark.anyio

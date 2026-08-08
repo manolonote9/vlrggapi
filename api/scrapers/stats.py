@@ -189,10 +189,12 @@ async def vlr_stats(region_key: str, timespan: str, event_id: str = "all"):
             # 2026 returns "No players match these filters" for its page id while
             # the event page has data). The event-scoped page always carries the
             # stats; it is inherently all-time and region-scoped, matching what
-            # callers already request (region=all, timespan=all).
+            # callers already request (region=all, timespan=all). No min rounds
+            # floor: the event page already scopes to event participants, so a
+            # player eliminated in groups (few rounds) should still appear.
             url = (
                 f"{VLR_BASE_URL}/event/stats/{event_id}"
-                f"?min_rounds=200&min_rating=1550&agent=all&map_id=all"
+                f"?min_rounds=0&min_rating=0&agent=all&map_id=all"
             )
         else:
             base_url = (
