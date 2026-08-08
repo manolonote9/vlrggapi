@@ -4,7 +4,7 @@ import logging
 from fastapi import HTTPException
 
 from utils.cache_manager import cache_manager
-from utils.constants import CACHE_TTL_STATS, VLR_STATS_URL
+from utils.constants import CACHE_TTL_STATS, VLR_BASE_URL, VLR_STATS_URL
 from utils.error_handling import (
     handle_scraper_errors,
     raise_for_upstream_status,
@@ -184,16 +184,27 @@ async def vlr_stats(region_key: str, timespan: str, event_id: str = "all"):
     validate_timespan(timespan)
 
     async def build():
-        base_url = (
-            f"{VLR_STATS_URL}/?event_group_id=all&event_id={event_id}"
-            f"&region={region_key}&country=all&min_rounds=200"
-            f"&min_rating=1550&agent=all&map_id=all"
-        )
-        url = (
-            f"{base_url}&timespan=all"
-            if timespan.lower() == "all"
-            else f"{base_url}&timespan={timespan}d"
-        )
+        if event_id and event_id != "all":
+            # The global /stats filter ignores event_id for some events (e.g. EWC
+            # 2026 returns "No players match these filters" for its page id while
+            # the event page has data). The event-scoped page always carries the
+            # stats; it is inherently all-time and region-scoped, matching what
+            # callers already request (region=all, timespan=all).
+            url = (
+                f"{VLR_BASE_URL}/event/stats/{event_id}"
+                f"?min_rounds=200&min_rating=1550&agent=all&map_id=all"
+            )
+        else:
+            base_url = (
+                f"{VLR_STATS_URL}/?event_group_id=all&event_id=all"
+                f"&region={region_key}&country=all&min_rounds=200"
+                f"&min_rating=1550&agent=all&map_id=all"
+            )
+            url = (
+                f"{base_url}&timespan=all"
+                if timespan.lower() == "all"
+                else f"{base_url}&timespan={timespan}d"
+            )
 
         client = get_http_client()
         await _prime_session(client)

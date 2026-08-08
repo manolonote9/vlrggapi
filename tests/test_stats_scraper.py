@@ -325,8 +325,11 @@ async def test_vlr_stats_filters_by_event_id(monkeypatch):
 
     await vlr_stats("americas", "60", "2952")
 
-    data_call = next(c for c in fetch.calls if _region_of(c) is not None)
-    assert "event_id=2952" in data_call
+    # Event-filtered stats scrape the event-scoped page (the global /stats filter
+    # ignores event_id for some events), not the global /stats page.
+    data_call = next(c for c in fetch.calls if "/event/stats/2952" in c)
+    assert "event/stats/2952" in data_call
+    assert "event_id=2952" not in data_call
 
 
 @pytest.mark.anyio
