@@ -20,6 +20,8 @@ from api.scrapers import (
     vlr_team,
     vlr_team_history,
     vlr_team_matches,
+    vlr_team_roster,
+    vlr_team_schedule,
     vlr_team_stats,
     vlr_team_transactions,
     vlr_team_upcoming,
@@ -140,6 +142,14 @@ async def get_team_history_data(team_id: str) -> dict:
 
 async def get_team_upcoming_data(team_id: str) -> dict:
     return await vlr_team_upcoming(team_id)
+
+
+async def get_team_roster_data(team_id: str) -> dict:
+    return await vlr_team_roster(team_id)
+
+
+async def get_team_schedule_data(team_id: str) -> dict:
+    return await vlr_team_schedule(team_id)
 
 
 async def get_event_matches_data(event_id: str) -> dict:

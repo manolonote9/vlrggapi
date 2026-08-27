@@ -20,6 +20,8 @@ from routers.shared_handlers import (
     get_team_data,
     get_team_history_data,
     get_team_matches_data,
+    get_team_roster_data,
+    get_team_schedule_data,
     get_team_stats_data,
     get_team_transactions_data,
     get_team_upcoming_data,
@@ -60,12 +62,14 @@ async def v2_news():
     return _wrap_v2(result)
 
 
-@router.get("/stats", response_model=V2Response, summary="Player stats", description="Get player statistics for a region, timespan and event.")
+@router.get("/stats", response_model=V2Response, summary="Player stats", description="Get player statistics for a region, timespan, and optional event.")
 async def v2_stats(
     region: str = Query(..., description="Region: all, americas, emea, pacific, china, intl (deprecated aliases: na/br -> americas, eu -> emea, ap/kr/jp/oce -> pacific, cn -> china)"),
     timespan: str = Query(..., description="Timespan: 30, 60, 90, or all"),
-    event_id: str = Query("all", description="VLR.GG event ID to filter by, or 'all'."),
+    event_id: str = Query("all", description="Optional numeric event ID to filter stats by event, or 'all'."),
 ):
+    if event_id != "all" and not event_id.isdigit():
+        raise HTTPException(status_code=400, detail="event_id must be a numeric ID or 'all'")
     result = await get_stats_data(region, timespan, event_id)
     return _wrap_v2(result)
 
@@ -141,10 +145,10 @@ async def v2_player(
     return _wrap_v2(result)
 
 
-@router.get("/team", response_model=V2Response, summary="Team data", description="Get team profile, match history, roster transactions, map stats, roster history, or upcoming matches via q parameter.")
+@router.get("/team", response_model=V2Response, summary="Team data", description="Get team profile, match history, roster transactions, map stats, roster history, grouped roster, upcoming matches, or schedule via q parameter.")
 async def v2_team(
     id: str = Query(..., description="VLR.GG team ID"),
-    q: str = Query("profile", description="Data type: profile, matches, transactions, stats, history, upcoming"),
+    q: str = Query("profile", description="Data type: profile, matches, transactions, stats, history, upcoming, roster, schedule"),
     page: int = Query(1, description="Page number for matches (1-based)", ge=1, le=100),
     date_start: str = Query("", description="Start date (YYYY-MM-DD) to restrict stats to matches from that day on. Only used with q=stats."),
 ):
@@ -163,6 +167,10 @@ async def v2_team(
         result = await get_team_history_data(id)
     elif q == "upcoming":
         result = await get_team_upcoming_data(id)
+    elif q == "roster":
+        result = await get_team_roster_data(id)
+    elif q == "schedule":
+        result = await get_team_schedule_data(id)
     else:
         result = await get_team_data(id)
 
