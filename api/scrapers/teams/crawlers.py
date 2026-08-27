@@ -19,8 +19,8 @@ from fastapi import HTTPException
 from utils.cache_manager import cache_manager
 from utils.constants import (
     CACHE_TTL_TEAM,
-    CACHE_TTL_TEAM_MATCHES,
     CACHE_TTL_TEAM_HISTORY,
+    CACHE_TTL_TEAM_MATCHES,
     CACHE_TTL_TEAM_ROSTER,
     CACHE_TTL_TEAM_SCHEDULE,
     CACHE_TTL_TEAM_STATS,
