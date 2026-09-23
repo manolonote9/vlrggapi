@@ -495,7 +495,7 @@ def _parse_transaction_item(item) -> dict | None:
     date_cell = (
         item.css_first("td.txn-item-date")
         or item.css_first(".txn-date")
-        or item.css_first("td:first-child")
+        or item.css_first(".ge-text-light")
     )
     date = _text(date_cell)
 
