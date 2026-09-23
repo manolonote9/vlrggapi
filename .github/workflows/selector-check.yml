@@ -9,6 +9,11 @@ on:
       - "tests/test_vlr_selectors.py"
       - ".github/workflows/selector-check.yml"
 
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
 jobs:
   check-selectors:
     runs-on: ubuntu-latest
