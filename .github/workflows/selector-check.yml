@@ -46,8 +46,9 @@ jobs:
           path: selector-report.json
           retention-days: 7
 
-      - name: Create issue on failure
-        if: steps.check.outcome == 'failure'
+      - name: Create or update issue
+        if: always() && !cancelled() && steps.check.outcome != 'skipped'
+        continue-on-error: true
         uses: actions/github-script@v9
         with:
           script: |
@@ -70,10 +71,22 @@ jobs:
             const fetchErrors = report.filter(r => r.fetch_error);
             const okCount = report.filter(r => !r.failed && r.broken_optional.length === 0).length;
 
+            // Nothing to report: all selectors OK (optional misses are not failures)
+            if (failedRequired.length === 0 && failedOptional.length === 0 &&
+                fetchErrors.length === 0 && !reportMissing) {
+              console.log("All selectors OK — no issue needed.");
+              return;
+            }
+
+            const title =
+              failedRequired.length > 0
+                ? "vlr.gg layout change detected — scrapers may be broken"
+                : "vlr.gg: optional selectors missing (informational)";
+
             // Build issue body
             const lines = [];
 
-            lines.push("## vlr.gg layout change detected");
+            lines.push(`## ${title}`);
             lines.push("");
             if (reportMissing) {
               lines.push(
@@ -157,7 +170,10 @@ jobs:
               state: "open",
             });
 
-            const title = "vlr.gg layout change detected — scrapers may be broken";
+            const labels =
+              failedRequired.length > 0
+                ? ["selector-check", "bug"]
+                : ["selector-check"];
 
             if (issues.length === 0) {
               await github.rest.issues.create({
@@ -165,7 +181,7 @@ jobs:
                 repo: context.repo.repo,
                 title,
                 body,
-                labels: ["selector-check", "bug"],
+                labels,
               });
             } else {
               await github.rest.issues.createComment({

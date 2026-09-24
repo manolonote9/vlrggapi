@@ -60,6 +60,31 @@ _MATCH_DETAIL_URL = f"{VLR_BASE_URL}/706350"
 _TEAM_URL = f"{VLR_BASE_URL}/team/2/sentinels"
 _PLAYER_URL = f"{VLR_BASE_URL}/player/9"
 
+_PLAYER_LABELS = ("player", "player_matches")
+_ACTIVE_PLAYER_URL: str | None = None
+
+
+async def _resolve_active_player(client: httpx.AsyncClient) -> str:
+    """Resolve the URL of the current top-rated player on VLR's /stats.
+
+    VLR only renders the per-agent table on *active* player profiles, so
+    the canary player must be resolved at runtime (retired players such as
+    /player/9 no longer have it and would trip the optional check forever).
+    """
+    global _ACTIVE_PLAYER_URL
+    if _ACTIVE_PLAYER_URL is not None:
+        return _ACTIVE_PLAYER_URL
+
+    html = await _fetch_html(client, f"{VLR_BASE_URL}/stats")
+    link = html.css_first("td.mod-player a[href*='/player/']")
+    if link is None:
+        raise RuntimeError(f"no active player link found on {VLR_BASE_URL}/stats")
+    href = link.attributes.get("href", "")
+    if not href.startswith("http"):
+        href = f"{VLR_BASE_URL}{href}"
+    _ACTIVE_PLAYER_URL = href
+    return href
+
 SELECTOR_SETS: ClassVar[list[SelectorSet]] = [
     # --- Homepage ---------------------------------------------------------
     SelectorSet(
@@ -457,7 +482,7 @@ SELECTOR_SETS: ClassVar[list[SelectorSet]] = [
 _REPORT_PATH = os.environ.get("SELECTOR_REPORT_PATH", "")
 
 
-def _check_selectors(html: SelectolaxParser, ss: SelectorSet) -> dict:
+def _check_selectors(html: SelectolaxParser, ss: SelectorSet, url: str | None = None) -> dict:
     """Return dict with detailed broken-selector report."""
     broken_required: list[str] = []
     broken_optional: list[str] = []
@@ -472,7 +497,7 @@ def _check_selectors(html: SelectolaxParser, ss: SelectorSet) -> dict:
 
     return {
         "page": ss.label,
-        "url": ss.url,
+        "url": url or ss.url,
         "source": ss.source,
         "total_required": len(ss.required),
         "broken_required": broken_required,
@@ -504,13 +529,15 @@ async def test_vlr_selectors(ss: SelectorSet):
             headers={"User-Agent": "vlrggapi-selector-check/1.0"},
             follow_redirects=True,
         ) as client:
-            html = await _fetch_html(client, ss.url)
-        return _check_selectors(html, ss)
+            url = ss.url
+            if ss.label in _PLAYER_LABELS:
+                base = await _resolve_active_player(client)
+                url = base if ss.label == "player" else f"{base}/matches"
+            html = await _fetch_html(client, url)
+        return _check_selectors(html, ss, url)
 
     def _would_fail(result: dict) -> bool:
-        return bool(result["broken_required"]) or (
-            bool(result["broken_optional"]) and "CI" in os.environ
-        )
+        return bool(result["broken_required"])
 
     result = None
     last_exc: Exception | None = None
@@ -541,13 +568,6 @@ async def test_vlr_selectors(ss: SelectorSet):
         pytest.fail(f"Broken required selectors on {ss.label}:\n{report}")
 
     broken_opt = result["broken_optional"]
-    if broken_opt and "CI" in os.environ:
-        summary = "\n  - ".join([""] + broken_opt)
-        pytest.fail(
-            f"{len(broken_opt)} optional selector(s) broken on "
-            f"{ss.label} (failing in CI):{summary}"
-        )
-
     if broken_opt:
         summary = "\n  - ".join([""] + broken_opt)
         print(
@@ -571,15 +591,25 @@ if __name__ == "__main__":
             headers={"User-Agent": "vlrggapi-selector-check/1.0"},
             follow_redirects=True,
         ) as client:
+            active_player: str | None = None
+            if any(ss.label in _PLAYER_LABELS for ss in SELECTOR_SETS):
+                active_player = await _resolve_active_player(client)
             for ss in SELECTOR_SETS:
                 try:
-                    html = await _fetch_html(client, ss.url)
+                    url = ss.url
+                    if active_player is not None and ss.label in _PLAYER_LABELS:
+                        url = (
+                            active_player
+                            if ss.label == "player"
+                            else f"{active_player}/matches"
+                        )
+                    html = await _fetch_html(client, url)
                 except Exception as exc:
                     print(f"  [{ss.label}] FETCH ERROR: {exc}")
                     all_ok = False
                     continue
 
-                result = _check_selectors(html, ss)
+                result = _check_selectors(html, ss, url)
                 req = result["broken_required"]
                 opt = result["broken_optional"]
 
